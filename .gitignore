@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# OMC/세션 상태 파일 (커밋 금지)
+.omc/
+*.jsonl

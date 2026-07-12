@@ -142,6 +142,11 @@ def build_icepak_model(args: argparse.Namespace) -> None:
     os.environ["PYAEDT_USE_PRE_GRPC_ARGS"] = "True"
     settings.grpc_secure_mode = False
 
+    # Student 버전은 콜드 스타트가 느려 기본 대기시간(120s) 안에 gRPC 서버가
+    # 준비되지 못할 수 있다. batch.log상 서버는 요청 포트에 실제로 뜨는데
+    # 클라이언트가 먼저 포기하는 패턴이 관찰됨 → 대기시간을 넉넉히 연장.
+    settings.desktop_launch_timeout = 600
+
     stack_geometry = build_geometry_spec(footprint_mm=tuple(args.footprint_mm))
     material_spec = build_material_spec()
     power_spec = build_power_spec(
