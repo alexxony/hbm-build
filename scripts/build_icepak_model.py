@@ -130,7 +130,17 @@ def build_icepak_model(args: argparse.Namespace) -> None:
     pyaedt import를 함수 내부에 두어, AEDT가 없는 환경에서 이 모듈을
     import하거나 py_compile 하는 것만으로는 실패하지 않도록 한다.
     """
-    from ansys.aedt.core import Icepak  # pyaedt Icepak 앱. Student도 공식 지원.
+    import os
+
+    from ansys.aedt.core import Icepak, settings  # pyaedt Icepak 앱. Student도 공식 지원.
+
+    # AEDT Student 2025 R2 이하는 기본 secure gRPC transport(wnua)로 기동이 실패한다
+    # ("Failed to start on gRPC port" 반복 후 예외). insecure TCP 모드로 강제 전환 필요.
+    # 반드시 Icepak()/Desktop() 생성 전에 설정해야 효과가 있다.
+    # 근거: https://aedt.docs.pyansys.com/version/stable/Getting_started/Troubleshooting.html
+    #       ("AEDT Student version fails to start via the default gRPC transport")
+    os.environ["PYAEDT_USE_PRE_GRPC_ARGS"] = "True"
+    settings.grpc_secure_mode = False
 
     stack_geometry = build_geometry_spec(footprint_mm=tuple(args.footprint_mm))
     material_spec = build_material_spec()
