@@ -209,11 +209,12 @@ def build_icepak_model(args: argparse.Namespace) -> None:
                 boundary_name=f"source_{layer_name}",
             )
 
-        # 4) 최상단 면(top_die 상부)에 히트싱크 근사 BC(고정 HTC) + 주변 온도.
-        # pyaedt 1.1.0: HTC 면 BC는 assign_stationary_wall_with_htc가 정석
-        # (assign_conducting_plate는 obj_plate/total_power 시그니처로 HTC 옵션 없음).
-        top_die = ipk.modeler[stack_geometry[-2]["name"]]  # top_die (EMC 이전 레이어)
-        top_face = max(top_die.faces, key=lambda f: f.center[2])
+        # 4) 스택 최상면(EMC 상부, 공기에 노출된 외곽면)에 히트싱크 근사 BC(고정 HTC).
+        # 주의: top_die 윗면은 EMC에 덮인 매몰 내부면이라 거기에 HTC를 걸면
+        # 유효 방열 경로가 없어져 해가 발산한다(전 die 5000K 캡, 실측 2회 재현).
+        # pyaedt 1.1.0: HTC 면 BC는 assign_stationary_wall_with_htc가 정석.
+        top_layer = ipk.modeler[stack_geometry[-1]["name"]]  # EMC (스택 최상단)
+        top_face = max(top_layer.faces, key=lambda f: f.center[2])
         ipk.assign_stationary_wall_with_htc(
             top_face.id,
             name="heatsink_approx",
@@ -275,6 +276,18 @@ def _export_die_temperatures(ipk, die_layer_names: list[str], output_csv: str) -
         writer.writerows(rows)
 
     print(f"[결과] die별 온도 CSV 저장 완료: {output_csv}")
+
+    # 발산 감지 가드: AEDT는 해가 발산해도 "solved correctly"를 찍고
+    # 온도를 상한 5000K(=4726.85°C)로 캡해서 내보낸다. 물리 범위 밖이면 즉시 경고.
+    max_seen = max(row["max_temp_c"] for row in rows)
+    if max_seen > 500.0:
+        print(
+            f"[경고] 최고 온도 {max_seen:.1f}°C — 물리적으로 불가능한 값. "
+            "해가 발산했을 가능성이 높다 (유효 방열 BC 부재/수렴 실패 의심). "
+            "결과를 신뢰하지 말 것."
+        )
+    else:
+        print(f"[검증] 최고 온도 {max_seen:.1f}°C — 물리 범위 내.")
 
 
 def main() -> None:
