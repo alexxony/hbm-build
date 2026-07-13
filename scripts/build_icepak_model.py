@@ -172,7 +172,7 @@ def build_and_solve(
     power_spec: dict,
     mesh_region_resolution: int,
     transient: bool,
-) -> None:
+) -> bool:
     """이미 생성된 Icepak 앱 인스턴스에 지오메트리/재료/전력/BC/메시를 구성하고 해석까지 실행한다.
 
     build_icepak_model()과 scripts/mesh_convergence.py(레벨별 반복 호출)가 공유하는
@@ -186,6 +186,12 @@ def build_and_solve(
         power_spec: build_power_spec() 결과.
         mesh_region_resolution: global mesh region의 MeshRegionResolution (정수 1~5).
         transient: True면 과도 해석 모드로 전환.
+
+    Returns:
+        ipk.analyze()의 반환값(bool) — True면 해석 성공. 호출자는 이 값을 보고
+        후처리(get_scalar_field_value 등) 실행 여부를 결정해야 한다. 해석 실패/
+        미완료 상태에서 후처리를 시도하면 CalculatorWrite 등 후속 네이티브 호출이
+        gRPC 오류로 죽을 수 있다(Task 3 Windows 실행 크래시 실측 확인).
     """
     # 1) 이방성 재료 등록 (재료명 -> k_x, k_y, k_z).
     for mat_name, props in material_spec.items():
@@ -252,7 +258,7 @@ def build_and_solve(
     if transient:
         setup.props["Transient"] = True
 
-    ipk.analyze()
+    return ipk.analyze()
 
 
 def build_icepak_model(args: argparse.Namespace) -> None:
@@ -283,7 +289,7 @@ def build_icepak_model(args: argparse.Namespace) -> None:
 
     try:
         mesh_region_resolution = max(1, round(3 * args.mesh_fraction))
-        build_and_solve(
+        analyze_ok = build_and_solve(
             ipk,
             stack_geometry=stack_geometry,
             material_spec=material_spec,
@@ -291,6 +297,12 @@ def build_icepak_model(args: argparse.Namespace) -> None:
             mesh_region_resolution=mesh_region_resolution,
             transient=args.transient,
         )
+        if not analyze_ok:
+            print(
+                "[오류] ipk.analyze()가 실패를 반환했습니다 — 후처리를 건너뜁니다. "
+                "해석 셋업/BC를 확인할 것."
+            )
+            sys.exit(1)
 
         # die별 평균/최대 온도 추출 -> CSV export.
         die_layer_names = [

@@ -35,6 +35,7 @@ CSV_FIELDNAMES = [
     "diverged",
     "converged",
     "change_pct",
+    "error",
 ]
 
 
@@ -44,6 +45,9 @@ class ConvergenceLevelResult:
 
     skipped_over_budget=True인 경우 온도/시간 필드는 None일 수 있다
     (512K 초과가 실행 후에야 확인되므로, 확인 시점까지의 값만 채워질 수 있음).
+    error가 not None이면 해당 레벨의 빌드/해석/후처리 중 예외가 발생해
+    다른 필드는 신뢰할 수 없다 — 스윕 전체를 죽이지 않고 이 레벨만
+    실패로 기록하기 위한 필드(Task 3 Windows 실행 크래시 대응).
     """
 
     level: int
@@ -57,6 +61,25 @@ class ConvergenceLevelResult:
     diverged: bool
     converged: bool
     change_pct: float | None
+    error: str | None = None
+
+
+def build_error_result(level: int, error_message: str) -> ConvergenceLevelResult:
+    """레벨 실행 중 예외가 발생했을 때 기록할 에러 플래그 결과를 만든다."""
+    return ConvergenceLevelResult(
+        level=level,
+        n_elements=None,
+        base_die_avg_c=None,
+        base_die_max_c=None,
+        top_die_avg_c=None,
+        top_die_max_c=None,
+        solve_time_s=None,
+        skipped_over_budget=False,
+        diverged=False,
+        converged=False,
+        change_pct=None,
+        error=error_message,
+    )
 
 
 def parse_levels(levels_arg: str | None) -> list[int]:
@@ -130,9 +153,12 @@ def compute_convergence_flags(
 ) -> list[ConvergenceLevelResult]:
     """연속 레벨 간 base_die max 온도 변화율을 계산해 수렴 플래그를 채운다.
 
-    skip되거나 발산한 레벨은 비교 기준(직전 유효 레벨)에서 제외한다 —
-    즉 각 유효 레벨은 "가장 최근의 유효(skip/발산 아닌) 레벨"과 비교한다.
-    skip/발산 레벨 자신은 항상 converged=False, change_pct=None으로 남는다.
+    skip되거나 발산하거나 에러가 난 레벨은 비교 기준(직전 유효 레벨)에서
+    제외한다 — 즉 각 유효 레벨은 "가장 최근의 유효(skip/발산/에러 아닌)
+    레벨"과 비교한다. 무효 레벨 자신은 항상 converged=False,
+    change_pct=None으로 남는다. 에러 레벨은 온도 필드가 None이므로
+    is_valid 판정에서 반드시 제외해야 한다(그렇지 않으면 이후 abs() 계산이
+    TypeError로 죽는다).
 
     Args:
         results: 레벨 순서대로 정렬된 결과 목록 (change_pct/converged는 무시하고 재계산).
@@ -144,7 +170,11 @@ def compute_convergence_flags(
     last_valid_max_temp: float | None = None
 
     for result in results:
-        is_valid = not result.skipped_over_budget and not result.diverged
+        is_valid = (
+            not result.skipped_over_budget
+            and not result.diverged
+            and result.error is None
+        )
 
         if not is_valid:
             flagged.append(_with_convergence(result, change_pct=None, converged=False))
@@ -182,6 +212,7 @@ def _with_convergence(
         diverged=result.diverged,
         converged=converged,
         change_pct=change_pct,
+        error=result.error,
     )
 
 
@@ -200,6 +231,7 @@ def build_csv_rows(results: list[ConvergenceLevelResult]) -> list[dict]:
             "diverged": r.diverged,
             "converged": r.converged,
             "change_pct": r.change_pct,
+            "error": r.error,
         }
         for r in results
     ]

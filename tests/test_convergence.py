@@ -10,6 +10,7 @@ from hbm_thermal.convergence import (
     CSV_FIELDNAMES,
     ConvergenceLevelResult,
     build_csv_rows,
+    build_error_result,
     check_divergence,
     check_mesh_budget,
     compute_convergence_flags,
@@ -167,6 +168,78 @@ class TestComputeConvergenceFlags:
         flagged = compute_convergence_flags(results)
         assert all(r.converged is False for r in flagged)
         assert all(r.change_pct is None for r in flagged)
+
+    def test_error_level_excluded_from_comparison_base_no_crash(self):
+        # error 레벨은 온도 필드가 None이므로 is_valid 판정에서 반드시
+        # 제외돼야 한다 — 그렇지 않으면 abs() 계산이 TypeError로 죽는다
+        # (None - float 불가). 레벨2가 에러나면 레벨3은 레벨1과 비교해야 함.
+        results = [
+            self._result(1, 122.2),
+            build_error_result(2, "ipk.analyze() returned False"),
+            self._result(3, 122.3),
+        ]
+        flagged = compute_convergence_flags(results)
+        assert flagged[1].converged is False
+        assert flagged[1].change_pct is None
+        expected_pct = abs(122.3 - 122.2) / 122.2 * 100
+        assert flagged[2].change_pct == pytest.approx(expected_pct)
+        assert flagged[2].converged is True
+
+    def test_error_level_itself_never_converged(self):
+        results = [self._result(1, 122.2), build_error_result(2, "boom")]
+        flagged = compute_convergence_flags(results)
+        assert flagged[1].converged is False
+
+    def test_error_field_preserved_through_convergence_flags(self):
+        results = [build_error_result(1, "boom")]
+        flagged = compute_convergence_flags(results)
+        assert flagged[0].error == "boom"
+
+    def test_all_error_no_crash(self):
+        results = [build_error_result(1, "a"), build_error_result(2, "b")]
+        flagged = compute_convergence_flags(results)
+        assert all(r.converged is False for r in flagged)
+        assert all(r.change_pct is None for r in flagged)
+
+
+class TestBuildErrorResult:
+    def test_error_message_set(self):
+        result = build_error_result(3, "gRPC crash")
+        assert result.level == 3
+        assert result.error == "gRPC crash"
+
+    def test_temperature_fields_none(self):
+        result = build_error_result(3, "gRPC crash")
+        assert result.base_die_avg_c is None
+        assert result.base_die_max_c is None
+        assert result.top_die_avg_c is None
+        assert result.top_die_max_c is None
+        assert result.n_elements is None
+        assert result.solve_time_s is None
+
+    def test_flags_default_false(self):
+        result = build_error_result(3, "gRPC crash")
+        assert result.skipped_over_budget is False
+        assert result.diverged is False
+        assert result.converged is False
+
+
+class TestConvergenceLevelResultErrorDefault:
+    def test_error_defaults_to_none(self):
+        result = ConvergenceLevelResult(
+            level=1,
+            n_elements=100_000,
+            base_die_avg_c=114.7,
+            base_die_max_c=122.2,
+            top_die_avg_c=112.7,
+            top_die_max_c=118.0,
+            solve_time_s=42.5,
+            skipped_over_budget=False,
+            diverged=False,
+            converged=False,
+            change_pct=None,
+        )
+        assert result.error is None
 
 
 class TestBuildCsvRows:
