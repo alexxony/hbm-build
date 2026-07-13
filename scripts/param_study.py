@@ -50,6 +50,7 @@ import argparse
 import csv
 import sys
 import time
+import traceback
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -300,8 +301,14 @@ def _run_case(case: ParamCase, args: argparse.Namespace) -> ParamCaseResult:
         )
 
     except Exception as exc:
-        print(f"[케이스 {case.name}] [오류] 케이스 실행 중 예외 발생: {exc}")
-        return build_error_result(case, str(exc))
+        # str(exc)만 남기면 발생 파일:라인을 알 수 없어 원인 특정이 불가능하다
+        # (Task 5 실측: stack_height_4hi가 "argument should be a str or an
+        # os.PathLike object ... not 'NoneType'" 한 줄만 남기고 실패, 어느
+        # 호출에서 났는지 코드 정적 추적만으로는 확정 불가했음). CSV의 error
+        # 필드에 전체 traceback을 실어 다음 실행에서 정확한 지점을 특정한다.
+        tb = traceback.format_exc()
+        print(f"[케이스 {case.name}] [오류] 케이스 실행 중 예외 발생:\n{tb}")
+        return build_error_result(case, f"{exc}\n{tb}")
 
     finally:
         if ipk is not None:
