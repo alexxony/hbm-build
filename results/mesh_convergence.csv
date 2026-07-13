@@ -1,0 +1,6 @@
+level,n_elements,base_die_avg_c,base_die_max_c,top_die_avg_c,top_die_max_c,solve_time_s,skipped_over_budget,diverged,converged,change_pct,error
+1,,114.72858534843066,122.21773681640627,112.7347320450031,120.36443481445315,118.20988880000368,False,False,False,,
+2,,114.72903761246229,122.2180114746094,112.7363125751565,120.36477050781252,112.8766006000078,False,False,True,0.00022472859527548574,
+3,,114.72860330985546,122.2473083496094,112.73823930577858,120.40346679687502,130.41664759999549,False,False,True,0.023970996293035236,
+4,,,,,,,False,False,False,,ipk.analyze() returned False
+5,,,,,,,False,False,False,,ipk.analyze() returned False
