@@ -200,6 +200,14 @@ def build_icepak_model(args: argparse.Namespace) -> None:
                 material=layer["material_name"],
             )
 
+        # 2.5) Region(공기 박스)을 스택 bbox에 밀착 — 패딩 전부 0.
+        # Icepak의 HTC 외부조건(Stationary Wall)은 계산 도메인 경계와 일치하는
+        # 면에서만 유효하다. Region이 스택보다 크면 EMC 상면이 도메인 내부면이
+        # 되어 HTC가 무시되고, 16W의 출구가 없는 특이계가 되어 온도가 솔버
+        # 기본 상한 5000K(=4726.85°C)까지 발산한다(실측 3회 재현).
+        # 패딩 0이면 EMC 상면 = 도메인 경계 → HTC가 진짜 경계조건이 된다.
+        ipk.modeler.edit_region_dimensions([0, 0, 0, 0, 0, 0])
+
         # 3) base_die/DRAM die에 source power 할당.
         for layer_name, power_w in power_spec.items():
             ipk.assign_source(
