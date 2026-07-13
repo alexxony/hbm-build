@@ -105,7 +105,7 @@ def main() -> int:
         )
         return 2
 
-    print(f"[4/6] Desktop 연결 OK — AEDT version: {desktop.release}")
+    print(f"[4/6] Desktop 연결 OK — AEDT version: {desktop.aedt_version_id}")
 
     try:
         project = desktop.odesktop.NewProject()
