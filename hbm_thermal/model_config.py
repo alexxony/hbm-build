@@ -112,20 +112,31 @@ def build_material_spec(stack: list[dict] | None = None) -> dict:
     return materials
 
 
-def build_power_spec(total_w: float = 16.0, base_die_fraction: float = 0.55) -> dict:
-    """총 발열량을 base_die와 DRAM die(dram_die_1~7 + top_die)에 배분한다.
+def build_power_spec(
+    stack: list[dict] | None = None,
+    total_w: float = 16.0,
+    base_die_fraction: float = 0.55,
+) -> dict:
+    """총 발열량을 base_die와 DRAM die(dram_die_1~N + top_die)에 배분한다.
 
     근거: HBM 열해석 문헌에서 base die(로직/PHY 다이)가 최대 발열원이라는
     결론(vault research/02-hbm-structure.md)에 따라 base_die에 큰 비중을 할당하고,
-    나머지는 DRAM 스택 8장(dram_die_1..7 + top_die)에 균등 배분한다.
+    나머지는 DRAM 스택(dram_die_1..N + top_die)에 균등 배분한다.
     정확한 배분 비율은 문헌상 특정되지 않아 파라미터(base_die_fraction)로 노출한다.
 
+    stack을 넘기면 다이 이름 목록을 stack에서 직접 도출한다(Task 5 #1 스택
+    높이 파라미터 스터디 — n_dram_dies가 다른 layer_stack_hbm2e() 결과를 그대로
+    전달하면 4/8/12-Hi 등 어떤 다이 수에도 자동으로 맞춰 배분한다). stack이
+    None이면 기존 동작(8-Hi 고정, dram_die_1..7 + top_die)을 그대로 유지한다.
+
     Args:
+        stack: layer_stack_hbm2e() 형식의 레이어 dict 목록. None이면 기본
+            8-Hi 스택(dram_die_1..7 + top_die)으로 배분.
         total_w: 스택 총 발열량 (W). 기본 16.0 W (문헌 범위 15~20 W 대표값).
         base_die_fraction: base_die가 차지하는 전력 비율. 기본 0.55.
 
     Returns:
-        레이어명 -> 전력(W) dict. base_die + dram_die_1..7 + top_die = 8개 항목.
+        레이어명 -> 전력(W) dict. base_die + dram_die_1..N + top_die.
         합계는 total_w와 일치 (부동소수 오차 허용).
 
     Raises:
@@ -139,8 +150,16 @@ def build_power_spec(total_w: float = 16.0, base_die_fraction: float = 0.55) -> 
     base_power_w = total_w * base_die_fraction
     remaining_w = total_w - base_power_w
 
-    # DRAM 다이 8장 = dram_die_1..7 (7장) + top_die (1장), 균등 배분.
-    dram_die_names = [f"dram_die_{i}" for i in range(1, 8)] + [_TOP_DIE_NAME]
+    if stack is None:
+        # 기존 동작 회귀 방지: stack 미지정 시 8-Hi 고정(dram_die_1..7 + top_die).
+        dram_die_names = [f"dram_die_{i}" for i in range(1, 8)] + [_TOP_DIE_NAME]
+    else:
+        dram_die_names = [
+            layer["name"]
+            for layer in stack
+            if layer["name"] == _TOP_DIE_NAME or layer["name"].startswith(_DRAM_DIE_PREFIX)
+        ]
+
     n_dram_dies = len(dram_die_names)
     per_die_power_w = remaining_w / n_dram_dies
 

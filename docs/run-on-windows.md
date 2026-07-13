@@ -117,6 +117,79 @@ wrapper `Icepak.export_mesh_stats(setup_name)`(`FieldAnalysis3D` 상속,
 정상적으로 찍히는지 콘솔에서 확인할 것 (실패 시 AEDT GUI의 Mesh Statistics
 창에서 수동 확인).
 
+## 4.6 Task 5: 파라미터 스터디 (스택 높이 / 본딩 방식 / 냉각 BC)
+
+`scripts/param_study.py`는 문헌 선례 3종(PROGRESS.md §파라미터 스터디 추천 조합)
+재현을 목표로 한다: #1 스택 높이 4/8/12-Hi(MDPI 12단↑ 열저항 급상승),
+#2 본딩 방식 μ-bump 4.2 vs hybrid 1.2 mm²·K/W(AIP JAP), #5 냉각 BC top-only
+vs top+bottom(imec 17°C 저감).
+
+**mesh_convergence.py와의 구조적 차이**: mesh_convergence.py는 mesh
+resolution만 바뀌므로 Icepak 인스턴스 하나를 스윕 전체에서 재사용했다.
+Task 5는 케이스마다 스택 높이가 달라 **지오메트리 자체가 바뀐다**(레이어
+수/두께/재료가 전부 변경) — 같은 인스턴스에 같은 이름의 box/재료/BC를
+다시 만들 수 없고, 그렇다고 한 프로세스 안에서 두 번째 프로젝트를 만들면
+Task 3 3차 크래시의 근본 원인(pyaedt `InsertDesign`이 두 번째 project에서
+`None` 반환 → `active_design()` 폴백이 `AttributeError`로 죽는 내부 버그)을
+다시 밟는다. 따라서 **케이스마다 완전히 새 Icepak 인스턴스
+(`new_desktop=True`)를 만들고, 그 인스턴스에서 프로젝트를 정확히 하나만
+다룬 뒤 즉시 `release_desktop()`한다** — "인스턴스당 정확히 1 프로젝트"
+원칙을 케이스 단위로 반복 적용해 다중 프로젝트 생성 경로 자체를 피한다.
+AEDT가 케이스 수만큼(기본 6회) 뜨고 닫히므로 전체 스위프 시간이 길다.
+
+실행 명령 (프로젝트 루트 `hbm_build/`에서):
+
+```powershell
+python scripts\param_study.py
+```
+
+주요 옵션:
+
+| 옵션 | 설명 | 기본값 |
+|---|---|---|
+| `--cases` | 실행할 케이스명, 콤마 구분 (예: `baseline_8hi,stack_height_12hi`) | 전체 6개 케이스 |
+| `--project-name-prefix` | AEDT 프로젝트 이름 접두어 — 케이스명이 접미어로 붙는다(`<prefix>_<케이스명>`) | `hbm2e_paramstudy` |
+| `--mesh-region-resolution` | global mesh region resolution — Task 3에서 수렴 확인된 기준선(2)을 기본값으로 사용 | `2` |
+| `--output-csv` | 결과 CSV 경로 | `results/param_study.csv` |
+| `--dry-run` | AEDT 연결 없이 케이스 목록/설정만 출력하고 종료 (WSL에서도 검증 가능) | 꺼짐 |
+
+**기본 6개 케이스**: `baseline_8hi`(8-Hi, μ-bump 지오메트리 근사, top-only
+냉각), `stack_height_4hi`/`stack_height_12hi`(스택 높이만 변경),
+`bonding_ubump`/`bonding_hybrid`(본딩 방식만 변경, μ-bump는 문헌 실측치
+4.2로 명시적으로 고정해 baseline의 지오메트리 근사와 별도 대조),
+`cooling_top_bottom`(냉각 BC만 변경). baseline 대비 축 하나만 바꾼
+단일변수 비교로 설계했다.
+
+**전력 가정 (중요 — 결과 해석 시 반드시 감안)**: die당 전력을 고정한다
+(base_die 8.8W + DRAM die 장당 0.9W). 스택 높이가 바뀌면 다이 수가 바뀌므로
+총 전력도 함께 바뀐다: 4-Hi=12.4W, 8-Hi=16.0W, 12-Hi=19.6W. 즉
+`stack_height_12hi` 케이스의 온도 상승분은 "다이 수 증가에 따른 열저항
+증가"와 "총 발열량 증가"가 뒤섞인 값이다 — 순수 열저항 효과만 보려면
+iso-power(총 전력 고정) 대안 케이스를 추가로 돌려 비교해야 한다(현재
+기본 케이스 목록에는 없음, 필요 시 `hbm_thermal/param_study.py`의
+`ParamCase(total_power_w=16.0, ...)`로 커스텀 케이스를 만들어 실행).
+
+**본딩 방식 물성 변환**: μ-bump(4.2)/hybrid(1.2 mm²·K/W)는 계면 열저항
+실측치를 `interfacial_resistance_to_k_z(t, R) = t/R`로 등가 k_z(W/m·K)로
+역산해 bump_layer의 k_z만 교체한다. k_xy는 지오메트리 기반
+Hasselman-Johnson 근사를 그대로 유지한다(문헌에 본딩 방식별 면내 실측치가
+없음 — 근거 문서화, 정량 검증 아님. `hbm_thermal/homogenize.py::_bump_layer`
+참고).
+
+**냉각 BC**: `cooling_top_bottom`은 base_die 하부면(스택 최하단, Region
+경계와 밀착)에 top과 동일한 HTC(2500 W/m²K) BC를 추가한다. imec 문헌은
+절대 HTC 수치를 특정하지 않으므로 "냉각 능력 대칭 확장" 가정이며, 결과는
+방향(top+bottom < top-only 온도) 재현 여부만 판정한다.
+
+**512K/발산 가드**: mesh_convergence.py와 동일한 검증된 API 경로
+(`export_mesh_stats`, 500°C 임계값)를 재사용한다. 12-Hi는 지오메트리가
+가장 커서 512K 한계에 걸릴 수 있다 — 걸리면 해당 케이스만 `error` 플래그로
+기록되고 나머지 케이스는 계속 진행한다(케이스 간 예외 격리).
+
+**결과**: `results/param_study.csv`(케이스별 치수/전력/온도) + 콘솔에
+문헌 방향 대조표(baseline vs comparison, CONFIRMED/NOT_CONFIRMED/SKIPPED)
+출력.
+
 ## 5. 문제 발생 시
 
 ### 5.0 "AEDT 창은 뜨는데 아무것도 안 만들어짐" (연결 실패)

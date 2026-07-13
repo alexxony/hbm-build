@@ -186,6 +186,7 @@ def build_geometry_materials_bcs(
     stack_geometry: list[dict],
     material_spec: dict,
     power_spec: dict,
+    bottom_htc_w_m2k: float | None = None,
 ) -> None:
     """이방성 재료·레이어 지오메트리·전력원·히트싱크 BC를 한 번만 구성한다.
 
@@ -204,6 +205,11 @@ def build_geometry_materials_bcs(
         stack_geometry: build_geometry_spec() 결과.
         material_spec: build_material_spec() 결과.
         power_spec: build_power_spec() 결과.
+        bottom_htc_w_m2k: 주어지면 스택 최하단(base_die 하부면)에도 고정 HTC
+            BC를 추가한다(Task 5 #5 냉각 BC 파라미터 스터디 — top-only vs
+            top+bottom, imec IEDM 2025 "backside 냉각 추가 시 17°C 저감"
+            방향 재현 목표, vault research/03-prior-art.md L22). None이면
+            기존 동작(top-only)과 완전히 동일.
     """
     # 1) 이방성 재료 등록 (재료명 -> k_x, k_y, k_z).
     for mat_name, props in material_spec.items():
@@ -251,6 +257,21 @@ def build_geometry_materials_bcs(
         name="heatsink_approx",
         htc=_HEATSINK_HTC_W_M2K,  # float -> w_per_m2kel 단위로 해석됨
     )
+
+    # 4.5) (선택) 스택 최하단(base_die 하부, 공기에 노출된 외곽면)에 추가
+    # HTC BC — Task 5 #5 냉각 BC 파라미터 스터디(top-only vs top+bottom).
+    # base_die는 스택 최하단이므로 그 최소 z면이 Region 경계와 밀착한다
+    # (2.5단계에서 Region 패딩을 전부 0으로 맞췄으므로 top_face와 동일한
+    # 근거로 이 면도 유효 외부 경계면이다).
+    if bottom_htc_w_m2k is not None:
+        bottom_layer = ipk.modeler[stack_geometry[0]["name"]]  # base_die (스택 최하단)
+        bottom_face = min(bottom_layer.faces, key=lambda f: f.center[2])
+        ipk.assign_stationary_wall_with_htc(
+            bottom_face.id,
+            name="backside_cooling",
+            htc=bottom_htc_w_m2k,
+        )
+
     ipk.edit_design_settings(ambient_temperature=_AMBIENT_TEMP_C)
 
 

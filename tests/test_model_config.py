@@ -134,3 +134,22 @@ class TestBuildPowerSpec:
         assert power_zero["base_die"] == pytest.approx(0.0)
         power_one = build_power_spec(total_w=16.0, base_die_fraction=1.0)
         assert power_one["base_die"] == pytest.approx(16.0)
+
+    def test_stack_arg_drives_dram_die_count_4hi(self):
+        # 4-Hi 스택(n_dram_dies=3) 전달 시 base_die + dram_die_1..3 + top_die = 5개 항목
+        stack = layer_stack_hbm2e(n_dram_dies=3)
+        power = build_power_spec(stack=stack, total_w=12.4, base_die_fraction=0.55)
+        assert len(power) == 5
+        assert set(power.keys()) == {"base_die", "dram_die_1", "dram_die_2", "dram_die_3", "top_die"}
+        assert sum(power.values()) == pytest.approx(12.4)
+
+    def test_stack_arg_drives_dram_die_count_12hi(self):
+        stack = layer_stack_hbm2e(n_dram_dies=11)
+        power = build_power_spec(stack=stack, total_w=19.6, base_die_fraction=0.55)
+        assert len(power) == 13  # base_die + dram_die_1..11 + top_die
+        assert sum(power.values()) == pytest.approx(19.6)
+
+    def test_stack_arg_none_defaults_to_8hi(self):
+        # 기존 동작 회귀 방지: stack 인자 없으면 8-Hi(9개 항목) 그대로.
+        power = build_power_spec(total_w=16.0, base_die_fraction=0.55)
+        assert len(power) == 9

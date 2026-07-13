@@ -8,6 +8,7 @@ import math
 import pytest
 
 from hbm_thermal.homogenize import (
+    interfacial_resistance_to_k_z,
     k_z_mixing,
     k_xy_hasselman_johnson,
     layer_stack_hbm2e,
@@ -124,3 +125,83 @@ class TestLayerStackHbm2e:
         layers = layer_stack_hbm2e()
         height = total_stack_height_um(layers)
         assert 400 < height < 900
+
+    def test_n_dram_dies_default_is_seven_8hi(self):
+        # 8-Hi = base 1 + DRAM 7 (기본값 유지, 회귀 방지)
+        layers = layer_stack_hbm2e()
+        dram_dies = [l for l in layers if l["name"].startswith("dram_die")]
+        bump_layers = [l for l in layers if l["name"].startswith("bump_layer")]
+        assert len(dram_dies) == 7
+        assert len(bump_layers) == 7
+
+    def test_n_dram_dies_4hi(self):
+        # 4-Hi = base 1 + DRAM 3 (top_die 포함하면 물리적으로 4개 다이 스택)
+        layers = layer_stack_hbm2e(n_dram_dies=3)
+        dram_dies = [l for l in layers if l["name"].startswith("dram_die")]
+        bump_layers = [l for l in layers if l["name"].startswith("bump_layer")]
+        assert len(dram_dies) == 3
+        assert len(bump_layers) == 3
+        # 총 레이어 수: base(1) + 3*(bump+die)=6 + top(1) + EMC(1) = 9
+        assert len(layers) == 9
+
+    def test_n_dram_dies_12hi(self):
+        # 12-Hi = base 1 + DRAM 11
+        layers = layer_stack_hbm2e(n_dram_dies=11)
+        dram_dies = [l for l in layers if l["name"].startswith("dram_die")]
+        assert len(dram_dies) == 11
+        # base(1) + 11*(bump+die)=22 + top(1) + EMC(1) = 25
+        assert len(layers) == 25
+
+    def test_n_dram_dies_names_sequential(self):
+        layers = layer_stack_hbm2e(n_dram_dies=3)
+        dram_names = [l["name"] for l in layers if l["name"].startswith("dram_die")]
+        assert dram_names == ["dram_die_1", "dram_die_2", "dram_die_3"]
+
+    def test_n_dram_dies_invalid_raises(self):
+        with pytest.raises(ValueError):
+            layer_stack_hbm2e(n_dram_dies=0)
+        with pytest.raises(ValueError):
+            layer_stack_hbm2e(n_dram_dies=-1)
+
+    def test_bump_thermal_resistance_override_changes_kz(self):
+        # 기본(μ-bump 근사, 지오메트리 기반)과 다른 R을 넣으면 k_z가 바뀌어야 함
+        default_layers = layer_stack_hbm2e(n_dram_dies=1)
+        default_bump = next(l for l in default_layers if l["name"] == "bump_layer_1")
+
+        override_layers = layer_stack_hbm2e(n_dram_dies=1, bump_thermal_resistance_mm2k_w=1.2)
+        override_bump = next(l for l in override_layers if l["name"] == "bump_layer_1")
+
+        assert override_bump["k_z"] != pytest.approx(default_bump["k_z"])
+
+    def test_bump_thermal_resistance_lower_r_gives_higher_kz(self):
+        # hybrid bonding(1.2) < μ-bump(4.2) mm^2*K/W -> hybrid의 k_z가 더 커야 함
+        layers_hybrid = layer_stack_hbm2e(n_dram_dies=1, bump_thermal_resistance_mm2k_w=1.2)
+        layers_ubump = layer_stack_hbm2e(n_dram_dies=1, bump_thermal_resistance_mm2k_w=4.2)
+        kz_hybrid = next(l for l in layers_hybrid if l["name"] == "bump_layer_1")["k_z"]
+        kz_ubump = next(l for l in layers_ubump if l["name"] == "bump_layer_1")["k_z"]
+        assert kz_hybrid > kz_ubump
+
+
+class TestInterfacialResistanceToKz:
+    def test_known_hand_calc(self):
+        # t=20um, R=4.2 mm^2*K/W -> k_z = t[m]/R[m^2*K/W] ≈ 4.7619 W/mK
+        k_z = interfacial_resistance_to_k_z(thickness_um=20.0, resistance_mm2k_w=4.2)
+        assert k_z == pytest.approx(4.761904761904762, rel=1e-9)
+
+    def test_hybrid_vs_ubump_ratio_matches_resistance_ratio(self):
+        # k_z는 R에 반비례하므로 R비 3.5(4.2/1.2)의 역수로 k_z비가 나와야 함
+        k_z_ubump = interfacial_resistance_to_k_z(thickness_um=20.0, resistance_mm2k_w=4.2)
+        k_z_hybrid = interfacial_resistance_to_k_z(thickness_um=20.0, resistance_mm2k_w=1.2)
+        assert (k_z_hybrid / k_z_ubump) == pytest.approx(4.2 / 1.2, rel=1e-9)
+
+    def test_zero_or_negative_resistance_raises(self):
+        with pytest.raises(ValueError):
+            interfacial_resistance_to_k_z(thickness_um=20.0, resistance_mm2k_w=0.0)
+        with pytest.raises(ValueError):
+            interfacial_resistance_to_k_z(thickness_um=20.0, resistance_mm2k_w=-1.0)
+
+    def test_zero_or_negative_thickness_raises(self):
+        with pytest.raises(ValueError):
+            interfacial_resistance_to_k_z(thickness_um=0.0, resistance_mm2k_w=4.2)
+        with pytest.raises(ValueError):
+            interfacial_resistance_to_k_z(thickness_um=-5.0, resistance_mm2k_w=4.2)
