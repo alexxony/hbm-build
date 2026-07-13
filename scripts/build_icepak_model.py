@@ -209,20 +209,22 @@ def build_icepak_model(args: argparse.Namespace) -> None:
                 boundary_name=f"source_{layer_name}",
             )
 
-        # 4) 최상단 면(top_die 상부)에 히트싱크 근사 BC + 주변 온도.
+        # 4) 최상단 면(top_die 상부)에 히트싱크 근사 BC(고정 HTC) + 주변 온도.
+        # pyaedt 1.1.0: HTC 면 BC는 assign_stationary_wall_with_htc가 정석
+        # (assign_conducting_plate는 obj_plate/total_power 시그니처로 HTC 옵션 없음).
         top_die = ipk.modeler[stack_geometry[-2]["name"]]  # top_die (EMC 이전 레이어)
         top_face = max(top_die.faces, key=lambda f: f.center[2])
-        ipk.assign_conducting_plate(
-            assignment=top_face.id,
-            boundary_name="heatsink_approx",
-            thermal_specification="Heat Transfer Coefficient",
-            input_value=f"{_HEATSINK_HTC_W_M2K}W_per_m2_Kel",
+        ipk.assign_stationary_wall_with_htc(
+            top_face.id,
+            name="heatsink_approx",
+            htc=_HEATSINK_HTC_W_M2K,  # float -> w_per_m2kel 단위로 해석됨
         )
         ipk.edit_design_settings(ambient_temperature=_AMBIENT_TEMP_C)
 
         # 5) 메시 설정 (Student 512K 한계 대비 안전율 적용).
+        # automatic 모드 + MeshRegionResolution(1~5)이 1.1.0에서 검증된 경로.
         global_mesh = ipk.mesh.global_mesh_region
-        global_mesh.manual_settings = True
+        global_mesh.manual_settings = False
         global_mesh.settings["MeshRegionResolution"] = max(
             1, round(3 * args.mesh_fraction)
         )
@@ -251,11 +253,13 @@ def _export_die_temperatures(ipk, die_layer_names: list[str], output_csv: str) -
     """die별 평균/최대 온도를 post-processing에서 추출해 CSV로 저장한다."""
     rows = []
     for name in die_layer_names:
+        # pyaedt 1.1.0 시그니처: quantity="Temp", 대상 지정은 object_name=
+        # (solution=은 해석 셋업 이름 자리 — 오브젝트명 넣으면 안 됨).
         avg_temp = ipk.post.get_scalar_field_value(
-            quantity="Temperature", scalar_function="Mean", solution=name
+            quantity="Temp", scalar_function="Mean", object_name=name
         )
         max_temp = ipk.post.get_scalar_field_value(
-            quantity="Temperature", scalar_function="Maximum", solution=name
+            quantity="Temp", scalar_function="Maximum", object_name=name
         )
         rows.append({"die": name, "avg_temp_c": avg_temp, "max_temp_c": max_temp})
 
