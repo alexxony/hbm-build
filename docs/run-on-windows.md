@@ -89,7 +89,7 @@ python scripts\mesh_convergence.py --levels 1,2,3,4,5
 | 옵션 | 설명 | 기본값 |
 |---|---|---|
 | `--levels` | 스윕할 mesh resolution 레벨, 콤마 구분 (예: `1,2,3`) | `1,2,3,4,5` (전체) |
-| `--project-name-prefix` | 레벨별 AEDT 프로젝트 이름 접두어 (`_L{level}` 접미어 자동 부여) | `hbm2e_8hi_meshconv` |
+| `--project-name` | AEDT 프로젝트 이름 — **전체 스위프가 이 프로젝트 하나를 재사용**한다(레벨마다 새 프로젝트를 만들지 않음, §5.0.2 참고) | `hbm2e_8hi_meshconv` |
 | `--output-csv` | 결과 CSV 경로 | `results/mesh_convergence.csv` |
 | `--dry-run` | AEDT 연결 없이 스윕 설정만 출력하고 종료 (WSL에서도 검증 가능) | 꺼짐 |
 
@@ -109,13 +109,13 @@ python scripts\mesh_convergence.py --levels 1,2,3,4,5
 1% 이하면 `converged=True`로 표시한다. skip/발산 레벨은 비교 기준에서 제외되고
 다음 유효 레벨은 그 이전 유효 레벨과 비교한다.
 
-**⚠️ Windows 첫 실행 검증 필요**: mesh element 수 조회(`_get_mesh_element_count`,
-`scripts/mesh_convergence.py`)는 pyaedt 공식 문서에 convergence 스터디 전용
-API가 명시되어 있지 않아 두 가지 경로(글로벌 메시 통계 → 해석 프로파일 텍스트
-파싱)를 순서대로 시도하고, 둘 다 실패하면 경고만 출력하고 512K 가드를
-건너뛰도록 방어적으로 작성했다. 첫 실행 시 element 수가 정상적으로 찍히는지
-반드시 콘솔에서 확인할 것 — 조회 실패 시 AEDT GUI의 Mesh Statistics 창에서
-수동 확인 후 이슈로 남겨 다음 정비 때 반영.
+**⚠️ Windows 실행에서 확인할 것**: mesh element 수 조회는 실존하는 pyaedt
+wrapper `Icepak.export_mesh_stats(setup_name)`(`FieldAnalysis3D` 상속,
+`@pyaedt_function_handler()`로 안전하게 감싸짐)로 `meshstats.ms` 파일을 쓰고
+그 안에서 파싱한다. 파싱 포맷이 AEDT 버전마다 다를 수 있어 실패해도 경고만
+출력하고 512K 가드를 건너뛰도록 방어적으로 작성했다 — 실행 시 element 수가
+정상적으로 찍히는지 콘솔에서 확인할 것 (실패 시 AEDT GUI의 Mesh Statistics
+창에서 수동 확인).
 
 ## 5. 문제 발생 시
 
@@ -178,53 +178,68 @@ API가 명시되어 있지 않아 두 가지 경로(글로벌 메시 통계 → 
 진단 팁: BC가 실제로 기록됐는지는 프로젝트 파일(텍스트)을 직접 확인 —
 `grep -n "BoundarySetup\|Stationary Wall\|Total Power" <프로젝트>.aedt`.
 
-### 5.0.2 "레벨 N에서 예외 → 그 다음 레벨들이 CSV에 흔적도 없이 사라짐" (mesh_convergence.py 다중 인스턴스 스위프 전용)
+### 5.0.2 "레벨 2에서 Icepak() 생성자 자체가 죽음" — 다중 프로젝트 스위프의 근본 결함 (해결됨, 구조 변경)
 
-증상: 스위프 도중 레벨 하나에서 gRPC 오류(`Failed to execute gRPC AEDT
-command: <아무 메서드>`, 예: `GetSetups`)가 나면 그 레벨은 CSV에 `error` 행으로
-정상 기록되는데, **그 다음 레벨들은 아예 실행 시도조차 안 된 것처럼 CSV에
-행이 없다**(실측 확인, 2026-07-13, mesh_convergence.py 2차 크래시).
+**증상 진행 (2026-07-13, 3차례 실측)**:
+1. 1차: 레벨1에서 `GetSetups` gRPC 오류 → 그 레벨은 CSV에 `error` 행으로
+   기록됐지만 레벨2~5는 CSV에 행조차 없이 사라짐.
+2. 2차 수정(예외 격리 강화 + `release_on_exception=False`) 후에도 재발:
+   사용자 콘솔 전문 확보 결과, **레벨2의 `Icepak(project=..., ...)` 생성자
+   호출 자체가 크래시**하는 것으로 확정:
+   ```
+   design.py:3538 _insert_design → desktop.py:1344 active_design
+   → warning_msg = f"Active Design set to {active_design.GetName()}"
+   → AttributeError: 'NoneType' object has no attribute 'GetName'
+   ```
 
-**근본 원인**: pyaedt의 `@pyaedt_function_handler` 데코레이터 기본 동작
-(`generic/general_methods.py`의 `raise_exception_or_return_false`) —
-`settings.enable_error_handler`가 기본값 `False`이면 예외를 재발생시키기
-전에 `settings.release_on_exception`(기본값 `True`)에 따라 **그 순간
-존재하는 활성 AEDT 데스크톱 세션 전체**(`_desktop_sessions`의 모든 항목)를
-`release_desktop()`한다. 즉 pyaedt API 호출 하나의 실패가 스크립트 코드와
-무관하게 프로세스 전역 데스크톱 세션을 조용히 정리해버린다.
+**근본 원인 (pyaedt 소스로 확정)**: `design.py:3538`의
+`self._oproject.InsertDesign(...)`가 **두 번째 프로젝트에서 `None`을
+반환**했다(AEDT/COM 레벨에서 디자인 생성 자체가 실패). pyaedt는 `None`이면
+`desktop_class.active_design(...)` 폴백 경로로 넘어가는데(`design.py:3538`),
+이 폴백 내부의 `active_design()`(`desktop.py:1300`)이 `name` 인자가
+있을 때 `project_object.SetActiveDesign(name)`을 호출하고 — 이 호출이
+예외 없이 `None`을 반환하면(발생한 경우) `except`가 트리거되지 않아
+`active_design`이 `None`인 채로 남고, 곧바로 `active_design.GetName()`을
+불러 `AttributeError`로 죽는다(`desktop.py:1344`, pyaedt 자체의
+null-check 누락 — 이건 우리가 고칠 수 없는 pyaedt 내부 결함).
 
-`build_icepak_model.py`처럼 인스턴스 하나만 쓰는 스크립트(Task 2)는 이
-전역 정리가 문제되지 않는다 — 애초에 그 하나뿐인 세션이 정리되고 나면
-스크립트가 곧 끝나기 때문. 하지만 `mesh_convergence.py`처럼 레벨마다
-**새 Icepak 인스턴스**를 만드는 스위프에서는, 레벨 N의 예외가 레벨 N+1의
-`Icepak()` 생성자가 실행되기 *전에* 이미 데스크톱 세션 인프라를 건드려
-놓는다 → 레벨 N+1의 `Icepak()` 생성자 자체가 깨진 상태 위에서 실행돼
-예외를 던지는데, 이 생성자 호출이 (수정 전 코드에서는) try 블록 **밖**에
-있어서 `_run_level` 함수 자체를 뚫고 나가 전체 `for` 루프를 죽였다.
+**레벨1의 `GetSetups` 실패도 같은 뿌리일 가능성이 높다**: `new_desktop=True`로
+레벨마다 새 `Icepak(project=..., ...)` 인스턴스/새 프로젝트를 만드는 방식
+자체가 AEDT Student의 다중 프로젝트/디자인 컨텍스트 추적과 근본적으로
+맞지 않는 것으로 보인다 — 정확한 AEDT 내부 이유(라이선스 제약인지 세션
+상태 버그인지)는 규명하지 못했지만, **다중 프로젝트 생성 자체를 피하면
+이 계열 실패를 통째로 우회**할 수 있다.
 
-**해결** (커밋 참고, 두 부분):
-1. `build_icepak_model.py`의 `_apply_student_grpc_workarounds()`에
-   `settings.release_on_exception = False`를 추가 — pyaedt의 전역 자동
-   해제를 끄고, 레벨별 예외 격리는 스크립트 코드가 전담하게 함.
-2. `mesh_convergence.py`의 `_run_level()`: `Icepak(...)` 생성자 호출을
-   try 블록 **안**으로 이동 — 생성자 자체가 실패해도 error 플래그 행으로
-   기록되고 다음 레벨로 넘어가도록 함.
+**해결 — 구조 변경(레벨별 예외 격리로는 원천 차단 불가능한 버그이므로)**:
+Task 2(`build_icepak_model.py`)에서 검증된 **단일 인스턴스·단일 프로젝트**
+경로로 스위프 자체를 재구성했다:
+1. `build_icepak_model.py`의 `build_and_solve()`를 3개 함수로 분리:
+   `build_geometry_materials_bcs()`(재료/지오메트리/BC, 1회만),
+   `create_conduction_setup()`(해석 셋업, 1회만),
+   `solve_at_mesh_resolution()`(mesh resolution만 바꿔 재해석, 레벨마다).
+   `build_and_solve()`는 이 셋을 순서대로 부르는 편의 래퍼로 남아 Task 2는
+   완전히 그대로 동작한다.
+2. `mesh_convergence.py`: `run_mesh_convergence()`가 Icepak 인스턴스를
+   **한 번**만 만들고 지오메트리/재료/BC/setup도 **한 번**만 구성한 뒤,
+   레벨 루프는 `solve_at_mesh_resolution(ipk, level)` + 후처리만 반복한다.
+   `--project-name-prefix`(레벨별 접미어) 옵션은 폐지하고 `--project-name`
+   (스위프 전체가 공유하는 프로젝트 이름) 하나로 교체했다.
+3. 인스턴스/지오메트리/setup 구성 단계(레벨 루프 진입 **전**)가 실패하면
+   레벨별 격리 대상이 아니라 **스위프 전체 실패**로 명확히 구분해 즉시
+   종료한다 — 이 단계는 원래 1회만 실행되므로 여기서 실패하면 재시도할
+   레벨 단위 작업이 없다.
+4. 레벨 루프 내부(재해석+후처리)는 기존과 동일하게 레벨별 try/except로
+   격리되고, 실패해도 error 플래그 행으로 남고 다음 레벨로 진행한다.
 
-**진단 팁**: 레벨 N에서 크래시 후 CSV에 레벨 N+1부터 행이 없다면, 이
-실패 모드를 의심할 것 — `_run_level`의 try 블록 범위(특히 `Icepak(...)`
-생성자가 안에 있는지)와 `settings.release_on_exception` 설정을 먼저
-확인한다.
+이 구조에서는 AEDT 기동이 스위프당 1회뿐이라 다중 InsertDesign 경로
+자체를 밟지 않으며, 부수 효과로 실행 시간도 크게 줄어든다.
 
-**미확인 대안/보조 가설**: 애초에 레벨 1에서 `GetSetups`가 왜 실패했는지
-(위 흐름은 "그 이후 레벨들이 사라진 이유"만 설명함) 자체는 이번 수정으로
-확정되지 않았다. 후보: (a) `new_desktop=True`로 레벨마다 새 인스턴스를
-띄우는 방식이 Student 라이선스의 동시 프로젝트 추적 제약과 충돌해
-`desktop.active_design()`이 `None`을 반환하는 경우, (b) 이전 레벨(또는
-이전 실행)의 좀비 AEDT 프로세스가 남아 세션 식별이 꼬이는 경우(§5.1
-"AEDT 프로세스 연결 실패"와 동일 계열). 다음 Windows 실행에서 레벨 1이
-또 실패하면 `GetSetups` 자체의 원인을 이 각도로 추가 진단할 것 — 인스턴스
-재사용(레벨마다 새로 만들지 않고 프로젝트/디자인만 갈아끼우는 방식)으로
-바꾸는 것도 고려 대상.
+**진단 팁**: `mesh resolution` 변경 후 재해석이 같은 setup에서 안전한지는
+`SetupIcepak.update()`/`global_mesh_region.update()`가 기존 설정을 덮어쓰는
+멱등적 API임을 pyaedt 소스로 확인(파라미터 변경 후 재호출은 표준 패턴).
+혹시 재발한다면 `ipk.setups[0]`가 매 레벨 동일 객체를 참조하는지,
+`global_mesh_region`의 `MeshRegionResolution` 갱신이 실제로 다음
+`ipk.analyze()`에 반영되는지(AEDT GUI에서 mesh 트리 확인)부터 볼 것.
 
 ### 5.1 기타
 

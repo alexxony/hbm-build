@@ -181,33 +181,29 @@ def _apply_student_grpc_workarounds() -> None:
     _desktop_mod.active_sessions = _active_sessions_student
 
 
-def build_and_solve(
+def build_geometry_materials_bcs(
     ipk,
     stack_geometry: list[dict],
     material_spec: dict,
     power_spec: dict,
-    mesh_region_resolution: int,
-    transient: bool,
-) -> bool:
-    """이미 생성된 Icepak 앱 인스턴스에 지오메트리/재료/전력/BC/메시를 구성하고 해석까지 실행한다.
+) -> None:
+    """이방성 재료·레이어 지오메트리·전력원·히트싱크 BC를 한 번만 구성한다.
 
-    build_icepak_model()과 scripts/mesh_convergence.py(레벨별 반복 호출)가 공유하는
-    핵심 빌드 로직. Icepak 인스턴스 생성/해제는 호출자 책임(레벨마다 새 인스턴스가
-    필요하므로 여기서 만들지 않는다).
+    이 함수는 Icepak 인스턴스당 **정확히 한 번**만 호출해야 한다 — 같은
+    이름의 재료/박스/BC를 다시 만들려고 하면 AEDT가 중복으로 취급해 실패
+    하거나 예기치 않은 상태가 된다. mesh resolution을 바꿔가며 재해석하는
+    스위프(scripts/mesh_convergence.py)는 이 함수를 딱 한 번 호출한 뒤
+    solve_at_mesh_resolution()만 레벨마다 반복 호출해야 한다(Task 3 Windows
+    3차 크래시 실측 확인: 레벨마다 새 Icepak 인스턴스+새 프로젝트를 만드는
+    방식에서 두 번째 프로젝트의 InsertDesign이 None을 반환하며
+    active_design() 폴백 경로가 AttributeError로 죽는 pyaedt 내부 버그를
+    유발함 — 인스턴스/프로젝트 재사용으로 이 경로 자체를 피한다).
 
     Args:
         ipk: 생성된 ansys.aedt.core.Icepak 인스턴스 (빈 프로젝트).
         stack_geometry: build_geometry_spec() 결과.
         material_spec: build_material_spec() 결과.
         power_spec: build_power_spec() 결과.
-        mesh_region_resolution: global mesh region의 MeshRegionResolution (정수 1~5).
-        transient: True면 과도 해석 모드로 전환.
-
-    Returns:
-        ipk.analyze()의 반환값(bool) — True면 해석 성공. 호출자는 이 값을 보고
-        후처리(get_scalar_field_value 등) 실행 여부를 결정해야 한다. 해석 실패/
-        미완료 상태에서 후처리를 시도하면 CalculatorWrite 등 후속 네이티브 호출이
-        gRPC 오류로 죽을 수 있다(Task 3 Windows 실행 크래시 실측 확인).
     """
     # 1) 이방성 재료 등록 (재료명 -> k_x, k_y, k_z).
     for mat_name, props in material_spec.items():
@@ -257,13 +253,21 @@ def build_and_solve(
     )
     ipk.edit_design_settings(ambient_temperature=_AMBIENT_TEMP_C)
 
-    # 5) 메시 설정. automatic 모드 + MeshRegionResolution(1~5)이 1.1.0에서 검증된 경로.
-    global_mesh = ipk.mesh.global_mesh_region
-    global_mesh.manual_settings = False
-    global_mesh.settings["MeshRegionResolution"] = mesh_region_resolution
-    global_mesh.update()
 
-    # 6) 해석 셋업 (steady 기본, transient=True 시 과도).
+def create_conduction_setup(ipk, transient: bool):
+    """전도 전용(Include Flow=False) 해석 셋업을 한 번만 생성한다.
+
+    build_geometry_materials_bcs()와 마찬가지로 Icepak 인스턴스당 한 번만
+    호출한다. mesh resolution 변경만으로 재해석하는 스위프는 이 setup
+    객체를 solve_at_mesh_resolution()에 재사용한다.
+
+    Args:
+        ipk: build_geometry_materials_bcs() 완료된 Icepak 인스턴스.
+        transient: True면 과도 해석 모드로 전환.
+
+    Returns:
+        생성된 SetupIcepak 객체.
+    """
     # 전도 전용(Temperature-only)으로 강제: 기본 셋업은 유동 ON인데
     # 밀폐 Region에서 유동을 20회 반복으로 돌리면 수렴 실패 → 전 노드가
     # AEDT 온도 상한 5000K(=4726.85°C)로 캡되는 쓰레기 결과가 나온다(실측).
@@ -273,8 +277,68 @@ def build_and_solve(
     setup.update()
     if transient:
         setup.props["Transient"] = True
+    return setup
+
+
+def solve_at_mesh_resolution(ipk, mesh_region_resolution: int) -> bool:
+    """global mesh region의 MeshRegionResolution만 바꿔 재해석한다.
+
+    build_geometry_materials_bcs()/create_conduction_setup()이 이미 끝난
+    Icepak 인스턴스에 대해, mesh resolution만 바꿔가며 여러 번 안전하게
+    반복 호출할 수 있다(SetupIcepak.update()/mesh 영역 update()는 기존
+    설정을 덮어쓰는 멱등적 호출 — pyaedt 소스에서 update() 시그니처 확인).
+
+    Args:
+        ipk: build_geometry_materials_bcs()+create_conduction_setup() 완료된 인스턴스.
+        mesh_region_resolution: global mesh region의 MeshRegionResolution (정수 1~5).
+
+    Returns:
+        ipk.analyze()의 반환값(bool) — True면 해석 성공. 호출자는 이 값을 보고
+        후처리(get_scalar_field_value 등) 실행 여부를 결정해야 한다. 해석 실패/
+        미완료 상태에서 후처리를 시도하면 CalculatorWrite 등 후속 네이티브 호출이
+        gRPC 오류로 죽을 수 있다(Task 3 Windows 실행 크래시 실측 확인).
+    """
+    # 메시 설정. automatic 모드 + MeshRegionResolution(1~5)이 1.1.0에서 검증된 경로.
+    global_mesh = ipk.mesh.global_mesh_region
+    global_mesh.manual_settings = False
+    global_mesh.settings["MeshRegionResolution"] = mesh_region_resolution
+    global_mesh.update()
 
     return ipk.analyze()
+
+
+def build_and_solve(
+    ipk,
+    stack_geometry: list[dict],
+    material_spec: dict,
+    power_spec: dict,
+    mesh_region_resolution: int,
+    transient: bool,
+) -> bool:
+    """단발성 해석(Task 2, build_icepak_model())용 편의 래퍼.
+
+    build_geometry_materials_bcs() + create_conduction_setup() +
+    solve_at_mesh_resolution()을 순서대로 한 번씩 호출한다. 인스턴스 하나로
+    끝나는 단발 실행에서만 사용할 것 — 같은 인스턴스에 이 함수를 두 번
+    호출하면 지오메트리/재료/BC가 중복 생성돼 실패한다. 여러 mesh
+    resolution을 반복 시도하려면(mesh_convergence.py처럼) 이 함수 대신
+    build_geometry_materials_bcs()+create_conduction_setup()을 한 번,
+    solve_at_mesh_resolution()을 레벨마다 호출할 것.
+
+    Args:
+        ipk: 생성된 ansys.aedt.core.Icepak 인스턴스 (빈 프로젝트).
+        stack_geometry: build_geometry_spec() 결과.
+        material_spec: build_material_spec() 결과.
+        power_spec: build_power_spec() 결과.
+        mesh_region_resolution: global mesh region의 MeshRegionResolution (정수 1~5).
+        transient: True면 과도 해석 모드로 전환.
+
+    Returns:
+        ipk.analyze()의 반환값(bool) — True면 해석 성공.
+    """
+    build_geometry_materials_bcs(ipk, stack_geometry, material_spec, power_spec)
+    create_conduction_setup(ipk, transient)
+    return solve_at_mesh_resolution(ipk, mesh_region_resolution)
 
 
 def build_icepak_model(args: argparse.Namespace) -> None:
