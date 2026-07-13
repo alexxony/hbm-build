@@ -113,6 +113,24 @@ python scripts\build_icepak_model.py --project-name hbm2e_8hi --total-power 16.0
 이슈 [#7842](https://github.com/ansys/pyaedt/issues/7842)). 이 설정은 유지한 채
 버전만 맞추면 된다.
 
+### 5.0.1 "전 die 온도가 4726.85°C" (해석 발산 런북)
+
+4726.85°C = 정확히 5000 K = 솔버 기본 온도 상한. **AEDT는 발산해도
+"solved correctly"를 출력하므로** 스크립트의 `[검증]`/`[경고]` 줄로 판정한다.
+원인 우선순위 (P1 디버깅에서 실측 확정, 커밋 e20eb32→5888fda):
+
+1. **Region이 스택보다 큼** (실제 근본 원인이었음): HTC 외부조건(Stationary
+   Wall)은 계산 도메인 경계면에서만 유효. Region(공기 박스)이 스택을 감싸면
+   EMC 상면이 내부면이 되어 HTC가 조용히 무시됨 → 16W 출구 없음 → 발산.
+   해결: `ipk.modeler.edit_region_dimensions([0]*6)` (스크립트 반영됨).
+2. **HTC를 매몰면에 할당**: top_die 상면은 EMC에 덮인 내부면 — HTC는 반드시
+   스택 최외곽 노출면(EMC 상면)에 걸 것 (스크립트 반영됨).
+3. **유동 ON + 밀폐 Region**: 기본 셋업은 SteadyTemperatureAndFlow. 전도 전용
+   모델에선 `setup.props["Include Flow"] = False` + MaxIterations 200 (반영됨).
+
+진단 팁: BC가 실제로 기록됐는지는 프로젝트 파일(텍스트)을 직접 확인 —
+`grep -n "BoundarySetup\|Stationary Wall\|Total Power" <프로젝트>.aedt`.
+
 ### 5.1 기타
 
 - **"mesh size exceeding" 오류**: `--mesh-fraction`을 낮추거나 풋프린트를
