@@ -178,6 +178,54 @@ API가 명시되어 있지 않아 두 가지 경로(글로벌 메시 통계 → 
 진단 팁: BC가 실제로 기록됐는지는 프로젝트 파일(텍스트)을 직접 확인 —
 `grep -n "BoundarySetup\|Stationary Wall\|Total Power" <프로젝트>.aedt`.
 
+### 5.0.2 "레벨 N에서 예외 → 그 다음 레벨들이 CSV에 흔적도 없이 사라짐" (mesh_convergence.py 다중 인스턴스 스위프 전용)
+
+증상: 스위프 도중 레벨 하나에서 gRPC 오류(`Failed to execute gRPC AEDT
+command: <아무 메서드>`, 예: `GetSetups`)가 나면 그 레벨은 CSV에 `error` 행으로
+정상 기록되는데, **그 다음 레벨들은 아예 실행 시도조차 안 된 것처럼 CSV에
+행이 없다**(실측 확인, 2026-07-13, mesh_convergence.py 2차 크래시).
+
+**근본 원인**: pyaedt의 `@pyaedt_function_handler` 데코레이터 기본 동작
+(`generic/general_methods.py`의 `raise_exception_or_return_false`) —
+`settings.enable_error_handler`가 기본값 `False`이면 예외를 재발생시키기
+전에 `settings.release_on_exception`(기본값 `True`)에 따라 **그 순간
+존재하는 활성 AEDT 데스크톱 세션 전체**(`_desktop_sessions`의 모든 항목)를
+`release_desktop()`한다. 즉 pyaedt API 호출 하나의 실패가 스크립트 코드와
+무관하게 프로세스 전역 데스크톱 세션을 조용히 정리해버린다.
+
+`build_icepak_model.py`처럼 인스턴스 하나만 쓰는 스크립트(Task 2)는 이
+전역 정리가 문제되지 않는다 — 애초에 그 하나뿐인 세션이 정리되고 나면
+스크립트가 곧 끝나기 때문. 하지만 `mesh_convergence.py`처럼 레벨마다
+**새 Icepak 인스턴스**를 만드는 스위프에서는, 레벨 N의 예외가 레벨 N+1의
+`Icepak()` 생성자가 실행되기 *전에* 이미 데스크톱 세션 인프라를 건드려
+놓는다 → 레벨 N+1의 `Icepak()` 생성자 자체가 깨진 상태 위에서 실행돼
+예외를 던지는데, 이 생성자 호출이 (수정 전 코드에서는) try 블록 **밖**에
+있어서 `_run_level` 함수 자체를 뚫고 나가 전체 `for` 루프를 죽였다.
+
+**해결** (커밋 참고, 두 부분):
+1. `build_icepak_model.py`의 `_apply_student_grpc_workarounds()`에
+   `settings.release_on_exception = False`를 추가 — pyaedt의 전역 자동
+   해제를 끄고, 레벨별 예외 격리는 스크립트 코드가 전담하게 함.
+2. `mesh_convergence.py`의 `_run_level()`: `Icepak(...)` 생성자 호출을
+   try 블록 **안**으로 이동 — 생성자 자체가 실패해도 error 플래그 행으로
+   기록되고 다음 레벨로 넘어가도록 함.
+
+**진단 팁**: 레벨 N에서 크래시 후 CSV에 레벨 N+1부터 행이 없다면, 이
+실패 모드를 의심할 것 — `_run_level`의 try 블록 범위(특히 `Icepak(...)`
+생성자가 안에 있는지)와 `settings.release_on_exception` 설정을 먼저
+확인한다.
+
+**미확인 대안/보조 가설**: 애초에 레벨 1에서 `GetSetups`가 왜 실패했는지
+(위 흐름은 "그 이후 레벨들이 사라진 이유"만 설명함) 자체는 이번 수정으로
+확정되지 않았다. 후보: (a) `new_desktop=True`로 레벨마다 새 인스턴스를
+띄우는 방식이 Student 라이선스의 동시 프로젝트 추적 제약과 충돌해
+`desktop.active_design()`이 `None`을 반환하는 경우, (b) 이전 레벨(또는
+이전 실행)의 좀비 AEDT 프로세스가 남아 세션 식별이 꼬이는 경우(§5.1
+"AEDT 프로세스 연결 실패"와 동일 계열). 다음 Windows 실행에서 레벨 1이
+또 실패하면 `GetSetups` 자체의 원인을 이 각도로 추가 진단할 것 — 인스턴스
+재사용(레벨마다 새로 만들지 않고 프로젝트/디자인만 갈아끼우는 방식)으로
+바꾸는 것도 고려 대상.
+
 ### 5.1 기타
 
 - **"mesh size exceeding" 오류**: `--mesh-fraction`을 낮추거나 풋프린트를

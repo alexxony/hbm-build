@@ -186,36 +186,47 @@ def _get_mesh_element_count(ipk, setup_name: str) -> int:
 def _run_level(level: int, args: argparse.Namespace) -> ConvergenceLevelResult:
     """한 mesh resolution 레벨에 대해 모델 빌드+해석을 실행하고 결과를 수집한다.
 
-    이 레벨 내부의 어떤 단계(빌드/해석/후처리)가 실패해도 예외를 상위로
-    전파하지 않는다 — 전체 스위프가 한 레벨의 문제로 죽지 않도록
-    error 플래그가 세워진 결과를 대신 반환한다(Task 3 Windows 실행
-    크래시 대응, 팀리드 필수 수정 사항).
+    이 레벨 내부의 어떤 단계(Icepak 인스턴스 생성 포함 — 빌드/해석/후처리)가
+    실패해도 예외를 상위로 전파하지 않는다 — 전체 스위프가 한 레벨의 문제로
+    죽지 않도록 error 플래그가 세워진 결과를 대신 반환한다(Task 3 Windows
+    실행 크래시 대응, 팀리드 필수 수정 사항).
+
+    ⚠️ Icepak() 생성자 호출도 반드시 try 블록 **안에** 있어야 한다. Windows
+    2차 크래시 실측(레벨1 GetSetups 예외 이후 레벨2~5가 CSV에 행조차 없이
+    증발)으로 확인된 원인: pyaedt의 @pyaedt_function_handler 기본 동작이
+    예외 발생 시 활성 AEDT 데스크톱 세션 전체를 조용히 release_desktop()
+    한다(release_on_exception 기본값 True — build_icepak_model.py의
+    _apply_student_grpc_workarounds()에서 이제 False로 끔). 이 전역 해제가
+    남아 있으면 다음 레벨의 Icepak() 생성자 자체가 깨진 세션 위에서 실행돼
+    죽는데, 예전 코드는 생성자 호출을 try 블록 **밖**에 둬서 그 예외가
+    _run_level 밖으로 그대로 새어나가 전체 스위프를 죽였다.
     """
-    from ansys.aedt.core import Icepak
-
-    from build_icepak_model import _apply_student_grpc_workarounds, build_and_solve
-
-    _apply_student_grpc_workarounds()
-
-    ipk = Icepak(
-        project=f"{args.project_name_prefix}_L{level}",
-        non_graphical=args.non_graphical,
-        new_desktop=True,
-        close_on_exit=False,
-        student_version=True,
-    )
-
+    ipk = None
     try:
-        try:
-            return _run_level_body(ipk, level, args, build_and_solve)
-        except Exception as exc:
-            print(f"[레벨 {level}] [오류] 레벨 실행 중 예외 발생 — 스킵하고 다음 레벨 진행: {exc}")
-            return build_error_result(level, str(exc))
+        from ansys.aedt.core import Icepak
+
+        from build_icepak_model import _apply_student_grpc_workarounds, build_and_solve
+
+        _apply_student_grpc_workarounds()
+
+        ipk = Icepak(
+            project=f"{args.project_name_prefix}_L{level}",
+            non_graphical=args.non_graphical,
+            new_desktop=True,
+            close_on_exit=False,
+            student_version=True,
+        )
+
+        return _run_level_body(ipk, level, args, build_and_solve)
+    except Exception as exc:
+        print(f"[레벨 {level}] [오류] 레벨 실행 중 예외 발생 — 스킵하고 다음 레벨 진행: {exc}")
+        return build_error_result(level, str(exc))
     finally:
-        try:
-            ipk.release_desktop()
-        except Exception as exc:
-            print(f"[레벨 {level}] [경고] release_desktop 실패(무시하고 진행): {exc}")
+        if ipk is not None:
+            try:
+                ipk.release_desktop()
+            except Exception as exc:
+                print(f"[레벨 {level}] [경고] release_desktop 실패(무시하고 진행): {exc}")
 
 
 def _run_level_body(ipk, level: int, args: argparse.Namespace, build_and_solve) -> ConvergenceLevelResult:

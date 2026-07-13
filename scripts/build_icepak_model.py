@@ -146,6 +146,22 @@ def _apply_student_grpc_workarounds() -> None:
     # 클라이언트가 먼저 포기하는 패턴이 관찰됨 → 대기시간을 넉넉히 연장.
     settings.desktop_launch_timeout = 600
 
+    # pyaedt의 @pyaedt_function_handler 기본 동작(generic/general_methods.py
+    # raise_exception_or_return_false): enable_error_handler=False(기본)이면
+    # 예외를 재발생시키기 전에 release_on_exception=True(기본)에 따라
+    # **활성 AEDT 데스크톱 세션 전체(_desktop_sessions 전부)를 release_desktop()
+    # 한다** — 특정 인스턴스가 아니라 프로세스 전역. mesh_convergence.py처럼
+    # 레벨마다 새 Icepak 인스턴스를 만드는 스윕에서, 레벨 N의 API 호출 하나가
+    # 예외를 던지면 레벨 N뿐 아니라 그 순간 존재하는 모든 데스크톱 세션이
+    # 조용히 닫히고, 다음 레벨의 Icepak() 생성자 호출이 깨진 상태 위에서
+    # 실행돼 스윕 전체가 죽는다(Task 3 Windows 2차 크래시 실측 확인:
+    # 레벨1 GetSetups 예외 -> 레벨2 이후 행 자체가 CSV에 없음, 즉
+    # try/except가 있는 코드에 도달하지도 못하고 Icepak() 생성자에서 죽음).
+    # 레벨별 예외 격리는 스크립트 쪽 코드(mesh_convergence.py _run_level)가
+    # 이미 책임지므로, pyaedt의 전역 자동 해제는 꺼서 레벨 간 세션을 서로
+    # 침범하지 않게 한다.
+    settings.release_on_exception = False
+
     # pyaedt(1.1.0/1.2.0 확인) 세션 감지 버그 우회: is_grpc_session_active()가
     # active_sessions()를 인자 없이 호출해 student_version=False 기본값으로
     # ansysedt.exe만 찾는다 → Student(ansysedtsv.exe)가 gRPC 포트를 물고 있어도
