@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AEDT-PyAEDT 연결 스모크 테스트 — 모델 생성 없이 연결만 검증한다.
+r"""AEDT-PyAEDT 연결 스모크 테스트 — 모델 생성 없이 연결만 검증한다.
 
 build_icepak_model.py가 "AEDT 창은 뜨는데 아무것도 안 만들어짐" 증상을 보일 때,
 문제를 (a) gRPC 연결 실패 vs (b) 모델 생성 API 실패로 분리하기 위한 최소 재현.
@@ -20,6 +20,30 @@ import argparse
 import os
 import sys
 import traceback
+
+
+def _force_student_session_detection() -> None:
+    """pyaedt 세션 감지가 Student 프로세스를 보도록 강제하는 몽키패치.
+
+    pyaedt(1.1.0 및 1.2.0에서 확인)의 is_grpc_session_active()는 내부에서
+    active_sessions()를 인자 없이 호출한다. student_version 기본값이 False라
+    타깃 프로세스가 ["ansysedt.exe"]로 고정되어, Student판(ansysedtsv.exe)이
+    gRPC 포트를 물고 있어도 "세션 없음"으로 판정한다(업스트림 이슈 #7891과
+    동일 계통, 1.1.0에도 존재함을 소스로 확인). 이 머신은 Student판 전용이므로
+    student_version=True를 무조건 강제한다.
+    """
+    import ansys.aedt.core.desktop as desktop_mod
+    from ansys.aedt.core.generic import general_methods
+
+    orig = general_methods.active_sessions
+
+    def _active_sessions_student(version=None, student_version=False, non_graphical=None):
+        return orig(version=version, student_version=True, non_graphical=non_graphical)
+
+    general_methods.active_sessions = _active_sessions_student
+    # desktop.py가 `from ... import active_sessions`로 직접 바인딩한 참조도 교체.
+    desktop_mod.active_sessions = _active_sessions_student
+    print("      (패치 적용: 세션 감지 student_version=True 강제)")
 
 
 def main() -> int:
@@ -54,6 +78,8 @@ def main() -> int:
     settings.desktop_launch_timeout = 600
     settings.enable_debug_logger = True
     settings.enable_debug_grpc_api_logger = True
+
+    _force_student_session_detection()
 
     print("[3/6] 설정 완료 — Desktop 기동/연결 시도 (최대 600초 대기)...")
 

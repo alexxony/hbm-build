@@ -147,6 +147,24 @@ def build_icepak_model(args: argparse.Namespace) -> None:
     # 클라이언트가 먼저 포기하는 패턴이 관찰됨 → 대기시간을 넉넉히 연장.
     settings.desktop_launch_timeout = 600
 
+    # pyaedt(1.1.0/1.2.0 확인) 세션 감지 버그 우회: is_grpc_session_active()가
+    # active_sessions()를 인자 없이 호출해 student_version=False 기본값으로
+    # ansysedt.exe만 찾는다 → Student(ansysedtsv.exe)가 gRPC 포트를 물고 있어도
+    # 영원히 "세션 없음" 판정(업스트림 이슈 #7891 계통). 이 머신은 Student 전용이므로
+    # 감지 시 student_version=True를 강제한다.
+    import ansys.aedt.core.desktop as _desktop_mod
+    from ansys.aedt.core.generic import general_methods as _gm
+
+    _orig_active_sessions = _gm.active_sessions
+
+    def _active_sessions_student(version=None, student_version=False, non_graphical=None):
+        return _orig_active_sessions(
+            version=version, student_version=True, non_graphical=non_graphical
+        )
+
+    _gm.active_sessions = _active_sessions_student
+    _desktop_mod.active_sessions = _active_sessions_student
+
     stack_geometry = build_geometry_spec(footprint_mm=tuple(args.footprint_mm))
     material_spec = build_material_spec()
     power_spec = build_power_spec(
