@@ -72,6 +72,49 @@ python scripts\build_icepak_model.py --project-name hbm2e_8hi --total-power 16.0
 
 ## 5. 문제 발생 시
 
+### 5.0 "AEDT 창은 뜨는데 아무것도 안 만들어짐" (연결 실패)
+
+전형적 원인 2가지. 순서대로 진단:
+
+1. **pyaedt 버전 확인** (가장 유력):
+   ```powershell
+   pip show pyaedt
+   ```
+   **pyaedt 1.2.0에 Student판 회귀 버그가 있다** (GitHub 이슈
+   [#7891](https://github.com/ansys/pyaedt/issues/7891), 2026-07 기준 미해결).
+   세션 감지 함수 `active_sessions()`가 `student_version` 인자를 전달받지
+   못해 정규판 프로세스명(`ansysedt.exe`)만 찾고 Student 프로세스
+   (`ansysedtsv.exe`)를 못 본다 → AEDT 창은 뜨지만 PyAEDT는 "세션 없음"으로
+   판단, 연결 실패. **버전이 1.2.0 이상이면 다운그레이드**:
+   ```powershell
+   pip install "pyaedt<1.2"
+   ```
+2. **연결 스모크 테스트** (모델 로직 배제, 연결만 검증):
+   ```powershell
+   python scripts\smoke_test_aedt.py
+   ```
+   - `[4/6]`에서 실패 → gRPC 연결 문제. 아래 3단계로.
+   - `[5-6/6]`에서 실패 → 연결은 정상, 모델 생성 API 문제. 에러 전문을 가져올 것.
+3. **수동 기동 + attach 분리 테스트** (서버 문제 vs 클라이언트 문제 분리):
+   ```powershell
+   # Student판 gRPC 서버 수동 기동 (경로는 설치 위치에 맞게;
+   # 통상 C:\Program Files\ANSYS Inc\ANSYS Student\v252\AnsysEM\Win64\)
+   ansysedtsv.exe -grpcsrv 50051
+   # 다른 터미널에서:
+   python scripts\smoke_test_aedt.py --attach-port 50051
+   ```
+   attach가 성공하면 서버는 정상이고 PyAEDT의 기동/감지 경로만 문제 —
+   pyaedt 다운그레이드(1번)로 해결된다. attach도 실패하면 콘솔 출력 전문 +
+   `%TEMP%`의 최신 `pyaedt_*.log`를 가져올 것.
+
+참고: 현재 스크립트의 `PYAEDT_USE_PRE_GRPC_ARGS=True` + `grpc_secure_mode=False`는
+공식 워크어라운드가 맞다 (Student ≤2025 R2는 기본 secure(wnua) transport 미지원,
+[공식 트러블슈팅 문서](https://aedt.docs.pyansys.com/version/stable/Getting_started/Troubleshooting.html),
+이슈 [#7842](https://github.com/ansys/pyaedt/issues/7842)). 이 설정은 유지한 채
+버전만 맞추면 된다.
+
+### 5.1 기타
+
 - **"mesh size exceeding" 오류**: `--mesh-fraction`을 낮추거나 풋프린트를
   줄여본다 (Ansys Learning Forum에 다수 보고된 Student 공통 이슈).
 - **AEDT 프로세스 연결 실패**: 기존 AEDT 프로세스를 모두 종료한 뒤 재시도.
