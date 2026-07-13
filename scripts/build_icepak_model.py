@@ -124,19 +124,18 @@ def _warn_if_mesh_exceeds_budget(n_layers: int, mesh_fraction: float) -> None:
         )
 
 
-def build_icepak_model(args: argparse.Namespace) -> None:
-    """PyAEDT로 Icepak 모델을 생성하고 해석을 실행한다.
+def _apply_student_grpc_workarounds() -> None:
+    """AEDT Student 접속에 필요한 gRPC/세션 감지 몽키패치를 적용한다.
 
-    pyaedt import를 함수 내부에 두어, AEDT가 없는 환경에서 이 모듈을
-    import하거나 py_compile 하는 것만으로는 실패하지 않도록 한다.
+    Icepak()/Desktop() 생성 전에 호출해야 효과가 있다. build_icepak_model()과
+    mesh_convergence.py의 스윕 루프 양쪽에서 공유하는 진입점.
     """
     import os
 
-    from ansys.aedt.core import Icepak, settings  # pyaedt Icepak 앱. Student도 공식 지원.
+    from ansys.aedt.core import settings
 
     # AEDT Student 2025 R2 이하는 기본 secure gRPC transport(wnua)로 기동이 실패한다
     # ("Failed to start on gRPC port" 반복 후 예외). insecure TCP 모드로 강제 전환 필요.
-    # 반드시 Icepak()/Desktop() 생성 전에 설정해야 효과가 있다.
     # 근거: https://aedt.docs.pyansys.com/version/stable/Getting_started/Troubleshooting.html
     #       ("AEDT Student version fails to start via the default gRPC transport")
     os.environ["PYAEDT_USE_PRE_GRPC_ARGS"] = "True"
@@ -165,6 +164,107 @@ def build_icepak_model(args: argparse.Namespace) -> None:
     _gm.active_sessions = _active_sessions_student
     _desktop_mod.active_sessions = _active_sessions_student
 
+
+def build_and_solve(
+    ipk,
+    stack_geometry: list[dict],
+    material_spec: dict,
+    power_spec: dict,
+    mesh_region_resolution: int,
+    transient: bool,
+) -> None:
+    """이미 생성된 Icepak 앱 인스턴스에 지오메트리/재료/전력/BC/메시를 구성하고 해석까지 실행한다.
+
+    build_icepak_model()과 scripts/mesh_convergence.py(레벨별 반복 호출)가 공유하는
+    핵심 빌드 로직. Icepak 인스턴스 생성/해제는 호출자 책임(레벨마다 새 인스턴스가
+    필요하므로 여기서 만들지 않는다).
+
+    Args:
+        ipk: 생성된 ansys.aedt.core.Icepak 인스턴스 (빈 프로젝트).
+        stack_geometry: build_geometry_spec() 결과.
+        material_spec: build_material_spec() 결과.
+        power_spec: build_power_spec() 결과.
+        mesh_region_resolution: global mesh region의 MeshRegionResolution (정수 1~5).
+        transient: True면 과도 해석 모드로 전환.
+    """
+    # 1) 이방성 재료 등록 (재료명 -> k_x, k_y, k_z).
+    for mat_name, props in material_spec.items():
+        material = ipk.materials.add_material(mat_name)
+        material.thermal_conductivity = [
+            props["k_x"],
+            props["k_y"],
+            props["k_z"],
+        ]
+
+    # 2) 레이어별 box 생성 + 재료 할당 (스택 z 방향 적층).
+    for layer in stack_geometry:
+        ipk.modeler.create_box(
+            origin=layer["origin_mm"],
+            sizes=layer["size_mm"],
+            name=layer["name"],
+            material=layer["material_name"],
+        )
+
+    # 2.5) Region(공기 박스)을 스택 bbox에 밀착 — 패딩 전부 0.
+    # Icepak의 HTC 외부조건(Stationary Wall)은 계산 도메인 경계와 일치하는
+    # 면에서만 유효하다. Region이 스택보다 크면 EMC 상면이 도메인 내부면이
+    # 되어 HTC가 무시되고, 16W의 출구가 없는 특이계가 되어 온도가 솔버
+    # 기본 상한 5000K(=4726.85°C)까지 발산한다(실측 3회 재현).
+    # 패딩 0이면 EMC 상면 = 도메인 경계 → HTC가 진짜 경계조건이 된다.
+    ipk.modeler.edit_region_dimensions([0, 0, 0, 0, 0, 0])
+
+    # 3) base_die/DRAM die에 source power 할당.
+    for layer_name, power_w in power_spec.items():
+        ipk.assign_source(
+            assignment=layer_name,
+            thermal_condition="Total Power",
+            assignment_value=f"{power_w}W",
+            boundary_name=f"source_{layer_name}",
+        )
+
+    # 4) 스택 최상면(EMC 상부, 공기에 노출된 외곽면)에 히트싱크 근사 BC(고정 HTC).
+    # 주의: top_die 윗면은 EMC에 덮인 매몰 내부면이라 거기에 HTC를 걸면
+    # 유효 방열 경로가 없어져 해가 발산한다(전 die 5000K 캡, 실측 2회 재현).
+    # pyaedt 1.1.0: HTC 면 BC는 assign_stationary_wall_with_htc가 정석.
+    top_layer = ipk.modeler[stack_geometry[-1]["name"]]  # EMC (스택 최상단)
+    top_face = max(top_layer.faces, key=lambda f: f.center[2])
+    ipk.assign_stationary_wall_with_htc(
+        top_face.id,
+        name="heatsink_approx",
+        htc=_HEATSINK_HTC_W_M2K,  # float -> w_per_m2kel 단위로 해석됨
+    )
+    ipk.edit_design_settings(ambient_temperature=_AMBIENT_TEMP_C)
+
+    # 5) 메시 설정. automatic 모드 + MeshRegionResolution(1~5)이 1.1.0에서 검증된 경로.
+    global_mesh = ipk.mesh.global_mesh_region
+    global_mesh.manual_settings = False
+    global_mesh.settings["MeshRegionResolution"] = mesh_region_resolution
+    global_mesh.update()
+
+    # 6) 해석 셋업 (steady 기본, transient=True 시 과도).
+    # 전도 전용(Temperature-only)으로 강제: 기본 셋업은 유동 ON인데
+    # 밀폐 Region에서 유동을 20회 반복으로 돌리면 수렴 실패 → 전 노드가
+    # AEDT 온도 상한 5000K(=4726.85°C)로 캡되는 쓰레기 결과가 나온다(실측).
+    # layer-cake 고체 스택 + 고정 HTC 방열 경로에는 전도 전용이 표준.
+    setup = ipk.create_setup(MaxIterations=200)
+    setup.props["Include Flow"] = False
+    setup.update()
+    if transient:
+        setup.props["Transient"] = True
+
+    ipk.analyze()
+
+
+def build_icepak_model(args: argparse.Namespace) -> None:
+    """PyAEDT로 Icepak 모델을 생성하고 해석을 실행한다.
+
+    pyaedt import를 함수 내부에 두어, AEDT가 없는 환경에서 이 모듈을
+    import하거나 py_compile 하는 것만으로는 실패하지 않도록 한다.
+    """
+    from ansys.aedt.core import Icepak  # pyaedt Icepak 앱. Student도 공식 지원.
+
+    _apply_student_grpc_workarounds()
+
     stack_geometry = build_geometry_spec(footprint_mm=tuple(args.footprint_mm))
     material_spec = build_material_spec()
     power_spec = build_power_spec(
@@ -182,77 +282,17 @@ def build_icepak_model(args: argparse.Namespace) -> None:
     )
 
     try:
-        # 1) 이방성 재료 등록 (재료명 -> k_x, k_y, k_z).
-        for mat_name, props in material_spec.items():
-            material = ipk.materials.add_material(mat_name)
-            material.thermal_conductivity = [
-                props["k_x"],
-                props["k_y"],
-                props["k_z"],
-            ]
-
-        # 2) 레이어별 box 생성 + 재료 할당 (스택 z 방향 적층).
-        for layer in stack_geometry:
-            ipk.modeler.create_box(
-                origin=layer["origin_mm"],
-                sizes=layer["size_mm"],
-                name=layer["name"],
-                material=layer["material_name"],
-            )
-
-        # 2.5) Region(공기 박스)을 스택 bbox에 밀착 — 패딩 전부 0.
-        # Icepak의 HTC 외부조건(Stationary Wall)은 계산 도메인 경계와 일치하는
-        # 면에서만 유효하다. Region이 스택보다 크면 EMC 상면이 도메인 내부면이
-        # 되어 HTC가 무시되고, 16W의 출구가 없는 특이계가 되어 온도가 솔버
-        # 기본 상한 5000K(=4726.85°C)까지 발산한다(실측 3회 재현).
-        # 패딩 0이면 EMC 상면 = 도메인 경계 → HTC가 진짜 경계조건이 된다.
-        ipk.modeler.edit_region_dimensions([0, 0, 0, 0, 0, 0])
-
-        # 3) base_die/DRAM die에 source power 할당.
-        for layer_name, power_w in power_spec.items():
-            ipk.assign_source(
-                assignment=layer_name,
-                thermal_condition="Total Power",
-                assignment_value=f"{power_w}W",
-                boundary_name=f"source_{layer_name}",
-            )
-
-        # 4) 스택 최상면(EMC 상부, 공기에 노출된 외곽면)에 히트싱크 근사 BC(고정 HTC).
-        # 주의: top_die 윗면은 EMC에 덮인 매몰 내부면이라 거기에 HTC를 걸면
-        # 유효 방열 경로가 없어져 해가 발산한다(전 die 5000K 캡, 실측 2회 재현).
-        # pyaedt 1.1.0: HTC 면 BC는 assign_stationary_wall_with_htc가 정석.
-        top_layer = ipk.modeler[stack_geometry[-1]["name"]]  # EMC (스택 최상단)
-        top_face = max(top_layer.faces, key=lambda f: f.center[2])
-        ipk.assign_stationary_wall_with_htc(
-            top_face.id,
-            name="heatsink_approx",
-            htc=_HEATSINK_HTC_W_M2K,  # float -> w_per_m2kel 단위로 해석됨
+        mesh_region_resolution = max(1, round(3 * args.mesh_fraction))
+        build_and_solve(
+            ipk,
+            stack_geometry=stack_geometry,
+            material_spec=material_spec,
+            power_spec=power_spec,
+            mesh_region_resolution=mesh_region_resolution,
+            transient=args.transient,
         )
-        ipk.edit_design_settings(ambient_temperature=_AMBIENT_TEMP_C)
 
-        # 5) 메시 설정 (Student 512K 한계 대비 안전율 적용).
-        # automatic 모드 + MeshRegionResolution(1~5)이 1.1.0에서 검증된 경로.
-        global_mesh = ipk.mesh.global_mesh_region
-        global_mesh.manual_settings = False
-        global_mesh.settings["MeshRegionResolution"] = max(
-            1, round(3 * args.mesh_fraction)
-        )
-        global_mesh.update()
-
-        # 6) 해석 셋업 (steady 기본, --transient 지정 시 과도).
-        # 전도 전용(Temperature-only)으로 강제: 기본 셋업은 유동 ON인데
-        # 밀폐 Region에서 유동을 20회 반복으로 돌리면 수렴 실패 → 전 노드가
-        # AEDT 온도 상한 5000K(=4726.85°C)로 캡되는 쓰레기 결과가 나온다(실측).
-        # layer-cake 고체 스택 + 고정 HTC 방열 경로에는 전도 전용이 표준.
-        setup = ipk.create_setup(MaxIterations=200)
-        setup.props["Include Flow"] = False
-        setup.update()
-        if args.transient:
-            setup.props["Transient"] = True
-
-        ipk.analyze()
-
-        # 7) die별 평균/최대 온도 추출 -> CSV export.
+        # die별 평균/최대 온도 추출 -> CSV export.
         die_layer_names = [
             layer["name"]
             for layer in stack_geometry

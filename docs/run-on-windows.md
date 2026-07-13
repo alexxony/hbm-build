@@ -70,6 +70,53 @@ python scripts\build_icepak_model.py --project-name hbm2e_8hi --total-power 16.0
 4. 결과 CSV를 vault(`/mnt/c/ObsidianVault/HBM_build/`)로 복사해 두면 다음
    단계(mesh convergence, 3D-ICE/CoMeT 교차검증)에서 참조하기 쉽다.
 
+## 4.5 Task 3: mesh convergence 스터디
+
+`scripts/mesh_convergence.py`는 `build_icepak_model.py`와 동일한 빌드 로직
+(`build_and_solve()`, `scripts/build_icepak_model.py`에서 import)을 재사용해
+mesh resolution 레벨(1~5, `MeshRegionResolution` 정수)을 순차 스윕하고
+element 수·die별 온도·해석 시간·수렴 여부를 기록한다.
+
+실행 명령 (프로젝트 루트 `hbm_build/`에서):
+
+```powershell
+python scripts\mesh_convergence.py --levels 1,2,3,4,5
+```
+
+주요 옵션 (build_icepak_model.py와 공통인 `--total-power`, `--base-die-fraction`,
+`--footprint-mm`, `--transient`, `--non-graphical`는 동일하게 지원):
+
+| 옵션 | 설명 | 기본값 |
+|---|---|---|
+| `--levels` | 스윕할 mesh resolution 레벨, 콤마 구분 (예: `1,2,3`) | `1,2,3,4,5` (전체) |
+| `--project-name-prefix` | 레벨별 AEDT 프로젝트 이름 접두어 (`_L{level}` 접미어 자동 부여) | `hbm2e_8hi_meshconv` |
+| `--output-csv` | 결과 CSV 경로 | `results/mesh_convergence.csv` |
+| `--dry-run` | AEDT 연결 없이 스윕 설정만 출력하고 종료 (WSL에서도 검증 가능) | 꺼짐 |
+
+**중단 후 재개**: 한 레벨이 오래 걸리거나 중간에 끊기면 `--levels`로 남은
+레벨만 지정해 재실행할 수 있다 (예: 1,2 완료 후 `--levels 3,4,5`). CSV는
+매 실행마다 전체를 새로 쓰므로, 재개 시 이전 레벨 결과를 CSV에 이어붙이려면
+각 실행의 CSV를 레벨 구간별로 별도 파일(`--output-csv`)로 저장한 뒤 합칠 것.
+
+**512K 가드**: 레벨별 실제 element 수는 실행 후에만 확인 가능하므로, 스크립트는
+해석 완료 후 element 수를 조회해 512K 초과 시 해당 레벨을 `skipped_over_budget`
+플래그로 CSV에 기록하고 온도 값은 비워둔다.
+
+**발산 가드**: 각 레벨의 base_die max 온도가 500°C를 넘으면 `diverged` 플래그를
+세우고 경고를 출력한다 (§5.0.1 런북 참고).
+
+**수렴 판정**: 유효한(skip/발산 아닌) 연속 레벨 간 base_die max 온도 변화율이
+1% 이하면 `converged=True`로 표시한다. skip/발산 레벨은 비교 기준에서 제외되고
+다음 유효 레벨은 그 이전 유효 레벨과 비교한다.
+
+**⚠️ Windows 첫 실행 검증 필요**: mesh element 수 조회(`_get_mesh_element_count`,
+`scripts/mesh_convergence.py`)는 pyaedt 공식 문서에 convergence 스터디 전용
+API가 명시되어 있지 않아 두 가지 경로(글로벌 메시 통계 → 해석 프로파일 텍스트
+파싱)를 순서대로 시도하고, 둘 다 실패하면 경고만 출력하고 512K 가드를
+건너뛰도록 방어적으로 작성했다. 첫 실행 시 element 수가 정상적으로 찍히는지
+반드시 콘솔에서 확인할 것 — 조회 실패 시 AEDT GUI의 Mesh Statistics 창에서
+수동 확인 후 이슈로 남겨 다음 정비 때 반영.
+
 ## 5. 문제 발생 시
 
 ### 5.0 "AEDT 창은 뜨는데 아무것도 안 만들어짐" (연결 실패)
