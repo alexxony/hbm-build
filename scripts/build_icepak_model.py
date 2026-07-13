@@ -231,7 +231,13 @@ def build_icepak_model(args: argparse.Namespace) -> None:
         global_mesh.update()
 
         # 6) 해석 셋업 (steady 기본, --transient 지정 시 과도).
-        setup = ipk.create_setup(MaxIterations=20)
+        # 전도 전용(Temperature-only)으로 강제: 기본 셋업은 유동 ON인데
+        # 밀폐 Region에서 유동을 20회 반복으로 돌리면 수렴 실패 → 전 노드가
+        # AEDT 온도 상한 5000K(=4726.85°C)로 캡되는 쓰레기 결과가 나온다(실측).
+        # layer-cake 고체 스택 + 고정 HTC 방열 경로에는 전도 전용이 표준.
+        setup = ipk.create_setup(MaxIterations=200)
+        setup.props["Include Flow"] = False
+        setup.update()
         if args.transient:
             setup.props["Transient"] = True
 
