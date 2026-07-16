@@ -1,4 +1,4 @@
-"""기본 물성 상수 (W/m·K).
+"""기본 물성 상수 (W/m·K, kg/m³, J/kg·K).
 
 각 값의 출처는 아래 주석 참고. 문헌/벤더 스펙의 대표값(단결정/벌크 기준)이며,
 실제 공정 조건(도핑, 결정립계, 박막 두께 효과 등)에 따라 달라질 수 있음.
@@ -27,3 +27,55 @@ K_UNDERFILL = 0.5
 # EMC (Epoxy Molding Compound, 몰딩 컴파운드)
 # 출처: 반도체 패키징용 EMC 벤더 스펙 대표값 (실리카 필러 함유 통상 제품)
 K_EMC = 1.0
+
+
+# --- 밀도 ρ (kg/m³) --------------------------------------------------------
+# Si: 단결정 실리콘 표준 밀도
+# 출처: CRC Handbook of Chemistry and Physics, 단결정 Si 벌크 밀도
+RHO_SI = 2329.0
+
+# Cu: 벌크 구리 표준 밀도
+# 출처: CRC Handbook of Chemistry and Physics, 벌크 Cu 밀도
+RHO_CU = 8960.0
+
+# SiO2: 비정질(열산화막) 밀도
+# 출처: Touloukian et al., Thermophysical Properties of Matter, Vol.2 (비정질 SiO2)
+RHO_SIO2 = 2200.0
+
+# solder (SAC계 SnAgCu 솔더 합금)
+# 출처: 일반 SAC305 합금 대표 밀도, 패키징 열해석 문헌 다수 인용
+RHO_SOLDER = 7400.0
+
+# underfill (에폭시 + 실리카 필러 통상 제품)
+# 출처: 패키징용 언더필 에폭시 벤더 스펙 대표값 (예: Namics, Henkel 계열 제품군)
+RHO_UNDERFILL = 1900.0
+
+# EMC (Epoxy Molding Compound)
+# 출처: 반도체 패키징용 EMC 벤더 스펙 대표값 (실리카 필러 함유 통상 제품)
+RHO_EMC = 1900.0
+
+
+# --- 비열 cp (J/kg·K) -------------------------------------------------------
+# Si: 단결정 실리콘, 상온 기준
+# 출처: Touloukian et al., Thermophysical Properties of Matter, Vol.4 (Si 비열)
+CP_SI = 705.0
+
+# Cu: 벌크 구리, 상온 기준
+# 출처: CRC Handbook of Chemistry and Physics, 벌크 Cu 비열
+CP_CU = 385.0
+
+# SiO2: 비정질(열산화막)
+# 출처: Touloukian et al., Thermophysical Properties of Matter, Vol.5 (비정질 SiO2 비열)
+CP_SIO2 = 745.0
+
+# solder (SAC계 SnAgCu 솔더 합금)
+# 출처: 일반 SAC305 합금 대표 비열, 패키징 열해석 문헌 다수 인용
+CP_SOLDER = 220.0
+
+# underfill (에폭시 + 실리카 필러 통상 제품)
+# 출처: 패키징용 언더필 에폭시 벤더 스펙 대표값 (예: Namics, Henkel 계열 제품군)
+CP_UNDERFILL = 1000.0
+
+# EMC (Epoxy Molding Compound)
+# 출처: 반도체 패키징용 EMC 벤더 스펙 대표값 (실리카 필러 함유 통상 제품)
+CP_EMC = 900.0

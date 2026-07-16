@@ -1,7 +1,7 @@
 """homogenize.py 단위 테스트.
 
-혼합법칙(수직 k_z), Hasselman-Johnson(면내 k_xy), HBM2E 8-Hi 레이어 스택
-생성 함수를 검증한다.
+혼합법칙(수직 k_z), Hasselman-Johnson(면내 k_xy), 체적 열용량 혼합법칙(rho_cp),
+HBM2E 8-Hi 레이어 스택 생성 함수를 검증한다.
 """
 import math
 
@@ -13,8 +13,22 @@ from hbm_thermal.homogenize import (
     k_xy_hasselman_johnson,
     layer_stack_hbm2e,
     total_stack_height_um,
+    volumetric_heat_capacity_mixing,
 )
-from hbm_thermal.materials import K_CU, K_SI
+from hbm_thermal.materials import (
+    CP_CU,
+    CP_EMC,
+    CP_SI,
+    CP_SOLDER,
+    CP_UNDERFILL,
+    K_CU,
+    K_SI,
+    RHO_CU,
+    RHO_EMC,
+    RHO_SI,
+    RHO_SOLDER,
+    RHO_UNDERFILL,
+)
 
 
 class TestKZMixing:
@@ -79,6 +93,43 @@ class TestHasselmanJohnson:
         k_xy_hasselman_johnson(148.0, 385.0, 0.9)
 
 
+class TestVolumetricHeatCapacityMixing:
+    def test_known_hand_calc_value(self):
+        # f={Cu:0.01, Si:0.99}, rho_cp_Cu=8960*385=3449600, rho_cp_Si=2329*705=1641945
+        # -> 0.01*3449600 + 0.99*1641945 = 34496 + 1625525.55 = 1660021.55
+        fractions = {"Cu": 0.01, "Si": 0.99}
+        rho_cp_values = {"Cu": RHO_CU * CP_CU, "Si": RHO_SI * CP_SI}
+        result = volumetric_heat_capacity_mixing(fractions, rho_cp_values)
+        assert result == pytest.approx(1660021.55, rel=1e-9)
+
+    def test_single_material_returns_its_rho_cp(self):
+        fractions = {"Si": 1.0}
+        rho_cp_values = {"Si": RHO_SI * CP_SI}
+        assert volumetric_heat_capacity_mixing(fractions, rho_cp_values) == pytest.approx(
+            RHO_SI * CP_SI
+        )
+
+    def test_fractions_sum_not_one_raises(self):
+        fractions = {"Cu": 0.5, "Si": 0.6}  # 합 1.1
+        rho_cp_values = {"Cu": RHO_CU * CP_CU, "Si": RHO_SI * CP_SI}
+        with pytest.raises(ValueError):
+            volumetric_heat_capacity_mixing(fractions, rho_cp_values)
+
+    def test_fractions_sum_within_tolerance_ok(self):
+        fractions = {"Cu": 0.5, "Si": 0.5 + 5e-7}
+        rho_cp_values = {"Cu": RHO_CU * CP_CU, "Si": RHO_SI * CP_SI}
+        result = volumetric_heat_capacity_mixing(fractions, rho_cp_values)
+        assert result > 0
+
+    def test_bump_layer_hand_calc(self):
+        # f_solder≈0.1623, rho_cp_solder=7400*220=1628000, rho_cp_underfill=1900*1000=1900000
+        # -> 0.1623*1628000 + 0.8377*1900000 = 264224.4 + 1591630 = 1855854.4
+        fractions = {"solder": 0.1623, "underfill": 1.0 - 0.1623}
+        rho_cp_values = {"solder": RHO_SOLDER * CP_SOLDER, "underfill": RHO_UNDERFILL * CP_UNDERFILL}
+        result = volumetric_heat_capacity_mixing(fractions, rho_cp_values)
+        assert result == pytest.approx(1855854.4, rel=1e-4)
+
+
 class TestLayerStackHbm2e:
     def test_layer_count(self):
         # 1(base) + 7*2(bump+die) + 1(top) + 1(EMC) = 17
@@ -90,6 +141,42 @@ class TestLayerStackHbm2e:
         for layer in layers:
             assert layer["k_xy"] > 0
             assert layer["k_z"] > 0
+
+    def test_all_rho_cp_positive(self):
+        layers = layer_stack_hbm2e()
+        for layer in layers:
+            assert layer["rho_cp"] > 0
+
+    def test_tsv_die_rho_cp_between_cu_and_si(self):
+        # Cu/Si 혼합이므로 base_die/dram_die의 rho_cp는 순수 Si와 순수 Cu 사이여야 함
+        layers = layer_stack_hbm2e()
+        rho_cp_si = RHO_SI * CP_SI
+        rho_cp_cu = RHO_CU * CP_CU
+        tsv_layers = [
+            l for l in layers if l["name"] == "base_die" or l["name"].startswith("dram_die")
+        ]
+        for layer in tsv_layers:
+            assert rho_cp_si < layer["rho_cp"] < rho_cp_cu
+
+    def test_top_die_rho_cp_is_pure_si(self):
+        layers = layer_stack_hbm2e()
+        top = next(l for l in layers if l["name"] == "top_die")
+        assert top["rho_cp"] == pytest.approx(RHO_SI * CP_SI)
+
+    def test_emc_rho_cp_is_pure_emc(self):
+        layers = layer_stack_hbm2e()
+        emc = next(l for l in layers if l["name"] == "EMC")
+        assert emc["rho_cp"] == pytest.approx(RHO_EMC * CP_EMC)
+
+    def test_bump_thermal_resistance_override_does_not_change_rho_cp(self):
+        # k_z override는 계면 열저항 역산이지만 rho_cp는 지오메트리 부피분율 고정
+        default_layers = layer_stack_hbm2e(n_dram_dies=1)
+        default_bump = next(l for l in default_layers if l["name"] == "bump_layer_1")
+
+        override_layers = layer_stack_hbm2e(n_dram_dies=1, bump_thermal_resistance_mm2k_w=1.2)
+        override_bump = next(l for l in override_layers if l["name"] == "bump_layer_1")
+
+        assert override_bump["rho_cp"] == pytest.approx(default_bump["rho_cp"])
 
     def test_tsv_die_layers_kz_greater_than_kxy(self):
         # Cu가 수직으로 관통하므로 k_z가 k_xy보다 커야 함 (base_die, dram_die)
