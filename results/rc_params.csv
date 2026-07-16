@@ -1,0 +1,3 @@
+parameter,value,value_min,value_max,unit,method,basis_case
+c_hbm,1.240170e-01,,,J/K,"해석적: Σ rho_cp_i * V_i (레이어별 T1 균질화 rho_cp x footprint*thickness 부피, hbm_thermal.homogenize.layer_stack_hbm2e)",layer_stack_hbm2e() 8-Hi 기본 스택; 상위 기여 3개: EMC=1.881000e-02 J/K; base_die=1.095986e-02 J/K; dram_die_1=8.219896e-03 J/K
+r_hbm_sink,4.670561,0.929032,4.670561,K/W,"실측: R = (base_die_avg_c - ambient_c) / total_power_w, 냉각 BC 상이한 두 케이스로 범위 산출 (Icepak HTC 단면 BC != A100 실장 TIM+히트싱크 — 단일값 아닌 범위로 제시)","baseline_8hi, cooling_top_bottom (baseline_8hi: dT=74.729K/P=16.000W->R=4.670561K/W; cooling_top_bottom: dT=14.865K/P=16.000W->R=0.929032K/W)"
