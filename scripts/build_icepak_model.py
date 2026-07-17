@@ -32,6 +32,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hbm_thermal.model_config import (  # noqa: E402
+    BASE_DIE_BLOCK_NAMES,
+    BASE_DIE_BLOCK_WIDTH_FRACTIONS,
+    POWER_SCENARIOS,
     build_geometry_spec,
     build_material_spec,
     build_power_spec,
@@ -66,6 +69,17 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=0.55,
         help="base_die가 차지하는 전력 비율 [0,1], 기본 0.55",
+    )
+    parser.add_argument(
+        "--power-scenario",
+        type=str,
+        choices=sorted(POWER_SCENARIOS),
+        default=None,
+        help=(
+            "base_die 블록별 전력맵(MHS) 시나리오. 지정 시 base_die를 "
+            "base_die_phy/tsva/da 3 sub-box로 분할하고 시나리오 비율대로 전력을 "
+            "배분한다. 기본 None = 기존 단일 base_die 동작(하위 호환, P3 T1/T2)."
+        ),
     )
     parser.add_argument(
         "--footprint-mm",
@@ -263,14 +277,30 @@ def build_geometry_materials_bcs(
     # base_die는 스택 최하단이므로 그 최소 z면이 Region 경계와 밀착한다
     # (2.5단계에서 Region 패딩을 전부 0으로 맞췄으므로 top_face와 동일한
     # 근거로 이 면도 유효 외부 경계면이다).
+    #
+    # P3 T2 주의: power_scenario 모드에서는 stack_geometry[0]이 base_die
+    # 전체가 아니라 base_die_phy(3 sub-box 중 첫 번째, x방향 폭의 일부)만
+    # 가리킨다 — 그 하나에만 BC를 걸면 TSVA/DA 구간 바닥면이 방열 경로 없이
+    # 남는다. 최하단 z 슬라이스를 공유하는 모든 레이어(단일 base_die 또는
+    # base_die_phy/tsva/da 3개)를 찾아 각각에 BC를 건다.
     if bottom_htc_w_m2k is not None:
-        bottom_layer = ipk.modeler[stack_geometry[0]["name"]]  # base_die (스택 최하단)
-        bottom_face = min(bottom_layer.faces, key=lambda f: f.center[2])
-        ipk.assign_stationary_wall_with_htc(
-            bottom_face.id,
-            name="backside_cooling",
-            htc=bottom_htc_w_m2k,
-        )
+        first_name = stack_geometry[0]["name"]
+        if first_name in BASE_DIE_BLOCK_NAMES:
+            # power_scenario 모드: base_die가 3 sub-box로 나뉘어 stack_geometry
+            # 앞쪽에 연달아 나온다 — 전부 base_die 하부 z슬라이스이므로 모두 대상.
+            bottom_layer_names = [
+                layer["name"] for layer in stack_geometry if layer["name"] in BASE_DIE_BLOCK_NAMES
+            ]
+        else:
+            bottom_layer_names = [first_name]  # 기존 동작: base_die 단일 box.
+        for idx, layer_name in enumerate(bottom_layer_names):
+            bottom_layer = ipk.modeler[layer_name]
+            bottom_face = min(bottom_layer.faces, key=lambda f: f.center[2])
+            ipk.assign_stationary_wall_with_htc(
+                bottom_face.id,
+                name=f"backside_cooling_{idx}" if len(bottom_layer_names) > 1 else "backside_cooling",
+                htc=bottom_htc_w_m2k,
+            )
 
     ipk.edit_design_settings(ambient_temperature=_AMBIENT_TEMP_C)
 
@@ -372,10 +402,14 @@ def build_icepak_model(args: argparse.Namespace) -> None:
 
     _apply_student_grpc_workarounds()
 
-    stack_geometry = build_geometry_spec(footprint_mm=tuple(args.footprint_mm))
+    stack_geometry = build_geometry_spec(
+        footprint_mm=tuple(args.footprint_mm), power_scenario=args.power_scenario
+    )
     material_spec = build_material_spec()
     power_spec = build_power_spec(
-        total_w=args.total_power, base_die_fraction=args.base_die_fraction
+        total_w=args.total_power,
+        base_die_fraction=args.base_die_fraction,
+        power_scenario=args.power_scenario,
     )
 
     _warn_if_mesh_exceeds_budget(len(stack_geometry), args.mesh_fraction)
@@ -406,20 +440,48 @@ def build_icepak_model(args: argparse.Namespace) -> None:
             sys.exit(1)
 
         # die별 평균/최대 온도 추출 -> CSV export.
+        # power_scenario 지정 시 base_die 대신 base_die_phy/tsva/da 3블록이
+        # stack_geometry에 들어있다 — 둘 다 자연스럽게 걸리도록 base_die로
+        # 시작하는 이름(단일 base_die 및 3블록 전부)을 포함한다.
         die_layer_names = [
             layer["name"]
             for layer in stack_geometry
-            if layer["name"] == "base_die" or layer["name"].startswith(("dram_die", "top_die"))
+            if layer["name"].startswith(("base_die", "dram_die", "top_die"))
         ]
-        _export_die_temperatures(ipk, die_layer_names, args.output_csv)
+        _export_die_temperatures(
+            ipk,
+            die_layer_names,
+            args.output_csv,
+            base_die_block_width_fractions=(
+                BASE_DIE_BLOCK_WIDTH_FRACTIONS if args.power_scenario is not None else None
+            ),
+        )
 
     finally:
         ipk.release_desktop()
 
 
-def _export_die_temperatures(ipk, die_layer_names: list[str], output_csv: str) -> None:
-    """die별 평균/최대 온도를 post-processing에서 추출해 CSV로 저장한다."""
+def _export_die_temperatures(
+    ipk,
+    die_layer_names: list[str],
+    output_csv: str,
+    base_die_block_width_fractions: dict[str, float] | None = None,
+) -> None:
+    """die별 평균/최대 온도를 post-processing에서 추출해 CSV로 저장한다.
+
+    Args:
+        ipk: 해석 완료된 Icepak 인스턴스.
+        die_layer_names: 온도를 추출할 오브젝트(레이어)명 목록.
+        output_csv: 결과 CSV 경로.
+        base_die_block_width_fractions: 지정되면(P3 T2, power_scenario 모드)
+            die_layer_names에 BASE_DIE_BLOCK_NAMES(base_die_phy/tsva/da)가
+            포함된 것으로 보고, 3블록 온도 행에 더해 면적가중 합성 base_die
+            행을 추가한다 — avg는 폭 비율 가중평균(면적가중, y·z 동일이므로
+            폭 비율=면적 비율), max는 3블록 max 중 최댓값(hotspot 근사).
+            None이면(기존 단일 base_die 동작) 이 로직을 건너뛴다.
+    """
     rows = []
+    temps_by_name: dict[str, dict[str, float]] = {}
     for name in die_layer_names:
         # pyaedt 1.1.0 시그니처: quantity="Temp", 대상 지정은 object_name=
         # (solution=은 해석 셋업 이름 자리 — 오브젝트명 넣으면 안 됨).
@@ -429,7 +491,23 @@ def _export_die_temperatures(ipk, die_layer_names: list[str], output_csv: str) -
         max_temp = ipk.post.get_scalar_field_value(
             quantity="Temp", scalar_function="Maximum", object_name=name
         )
+        temps_by_name[name] = {"avg_temp_c": avg_temp, "max_temp_c": max_temp}
         rows.append({"die": name, "avg_temp_c": avg_temp, "max_temp_c": max_temp})
+
+    if base_die_block_width_fractions is not None:
+        block_names_present = [
+            name for name in base_die_block_width_fractions if name in temps_by_name
+        ]
+        if block_names_present:
+            total_frac = sum(base_die_block_width_fractions[n] for n in block_names_present)
+            composite_avg = sum(
+                temps_by_name[n]["avg_temp_c"] * base_die_block_width_fractions[n]
+                for n in block_names_present
+            ) / total_frac
+            composite_max = max(temps_by_name[n]["max_temp_c"] for n in block_names_present)
+            rows.append(
+                {"die": "base_die", "avg_temp_c": composite_avg, "max_temp_c": composite_max}
+            )
 
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["die", "avg_temp_c", "max_temp_c"])
