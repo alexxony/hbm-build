@@ -82,6 +82,18 @@ class TestBuildHeatSinkBlock:
         assert "2.500000e-09" in text
         assert "313.1500" in text
 
+    def test_bottom_htc_none_omits_bottom_block(self):
+        # P4 T2 회귀 게이트 — 기존 top-only 동작 무변경.
+        text = build_heat_sink_block(htc_w_m2k=2500.0, ambient_c=40.0)
+        assert "bottom heat sink" not in text
+
+    def test_bottom_htc_specified_adds_bottom_block(self):
+        text = build_heat_sink_block(htc_w_m2k=2500.0, ambient_c=40.0, bottom_htc_w_m2k=2500.0)
+        assert "top heat sink" in text
+        assert "bottom heat sink" in text
+        assert text.count("2.500000e-09") == 2  # top·bottom 동일 HTC 각 1회
+        assert text.count("313.1500") == 2  # top·bottom 동일 ambient 각 1회
+
 
 class TestBuildDimensionsBlock:
     def test_footprint_converted_to_um(self):
@@ -215,6 +227,18 @@ class TestBuildStackDescription:
             if fname == "stack.stk":
                 continue
             assert f'"./{fname}"' in stk
+
+    def test_bottom_htc_none_default_omits_bottom_sink(self):
+        # P4 T2 회귀 게이트 — bottom_htc_w_m2k 미지정 시 기존 A계열(top-only) 무변경.
+        files = build_stack_description()
+        assert "bottom heat sink" not in files["stack.stk"]
+
+    def test_bottom_htc_specified_adds_bottom_sink(self):
+        # P4 T2 — B계열(top+bottom) 경로.
+        files = build_stack_description(bottom_htc_w_m2k=2500.0)
+        stk = files["stack.stk"]
+        assert "top heat sink" in stk
+        assert "bottom heat sink" in stk
 
 
 class TestBuildStackDescriptionPowerScenario:

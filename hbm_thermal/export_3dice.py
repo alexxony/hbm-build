@@ -124,23 +124,43 @@ def build_materials_block(material_spec: dict) -> str:
     return "\n".join(blocks)
 
 
-def build_heat_sink_block(htc_w_m2k: float, ambient_c: float) -> str:
-    """상단 히트싱크 근사 BC 블록을 만든다 (Icepak assign_stationary_wall_with_htc와 등가).
+def build_heat_sink_block(
+    htc_w_m2k: float, ambient_c: float, bottom_htc_w_m2k: float | None = None
+) -> str:
+    """히트싱크 근사 BC 블록을 만든다 (Icepak assign_stationary_wall_with_htc와 등가).
+
+    P4 T2 — bottom_htc_w_m2k가 지정되면 하단(비 heatsink측) 냉각 BC도 함께
+    출력한다. 3D-ICE 문법(bison/stack_description_parser.y)의 heatsink_opt
+    규칙이 ``topsink``, ``bottomsink``, ``topsink bottomsink`` 조합을 전부
+    허용하고, bottomsink 규칙(``BOTTOM HEAT SINK ':' HEAT TRANSFER
+    COEFFICIENT DVALUE ';' TEMPERATURE DVALUE ';'``)이 topsink와 완전히
+    대칭 구조임을 실측 확인(R1 판정: 하단 냉각 BC 지원). None(기본)이면
+    기존 top-only 동작 그대로 — 회귀 방지.
 
     Args:
-        htc_w_m2k: 히트싱크 HTC (W/m²K).
-        ambient_c: 주변 온도 (°C).
+        htc_w_m2k: 상단 히트싱크 HTC (W/m²K).
+        ambient_c: 주변 온도 (°C, top/bottom 공통).
+        bottom_htc_w_m2k: 하단 히트싱크 HTC (W/m²K). None이면 top-only
+            (기존 동작 무변경).
 
     Returns:
-        3D-ICE .stk top heat sink 블록 텍스트.
+        3D-ICE .stk heat sink 블록 텍스트 (top 단독 또는 top+bottom).
     """
     htc_3dice = htc_w_m2k_to_3dice(htc_w_m2k)
     temp_k = celsius_to_kelvin(ambient_c)
-    return (
+    text = (
         "top heat sink :\n"
         f"   heat transfer coefficient {htc_3dice:.6e} ;\n"
         f"   temperature               {temp_k:.4f} ;\n"
     )
+    if bottom_htc_w_m2k is not None:
+        bottom_htc_3dice = htc_w_m2k_to_3dice(bottom_htc_w_m2k)
+        text += (
+            "\nbottom heat sink :\n"
+            f"   heat transfer coefficient {bottom_htc_3dice:.6e} ;\n"
+            f"   temperature               {temp_k:.4f} ;\n"
+        )
+    return text
 
 
 def build_dimensions_block(
@@ -427,6 +447,7 @@ def build_stack_description(
     base_die_fraction: float = 0.55,
     ambient_c: float = 40.0,
     htc_w_m2k: float = 2500.0,
+    bottom_htc_w_m2k: float | None = None,
     transient: bool = False,
     initial_temperature_c: float | None = None,
     step_time_s: float = 0.01,
@@ -487,7 +508,12 @@ def build_stack_description(
         total_power_w: 스택 총 발열량 (W).
         base_die_fraction: base_die 전력 비율.
         ambient_c: 주변 온도 (°C) — heat sink 블록의 BC 온도(steady/transient 공통).
-        htc_w_m2k: 히트싱크 HTC (W/m²K).
+        htc_w_m2k: 상단 히트싱크 HTC (W/m²K).
+        bottom_htc_w_m2k: 하단 히트싱크 HTC (W/m²K). None(기본)이면 top-only
+            (기존 동작 무변경 — 회귀 방지). 지정 시 build_heat_sink_block()이
+            bottom heat sink 블록도 함께 발행한다(P4 T2, R1 판정: 3D-ICE
+            bison 문법이 bottomsink를 지원 — 위 build_heat_sink_block()
+            docstring 참고).
         transient: True면 transient 스텝 응답 입력 생성. False(기본)면 기존
             steady 동작 그대로 — 회귀 방지.
         initial_temperature_c: transient 초기온도(°C). None이면 ambient_c
@@ -560,7 +586,7 @@ def build_stack_description(
                 geometry.append(layer)
 
     materials_block = build_materials_block(material_spec)
-    heat_sink_block = build_heat_sink_block(htc_w_m2k, ambient_c)
+    heat_sink_block = build_heat_sink_block(htc_w_m2k, ambient_c, bottom_htc_w_m2k=bottom_htc_w_m2k)
     cell_divisions = _SCENARIO_CELL_DIVISIONS if power_scenario is not None else _DEFAULT_CELL_DIVISIONS
     dimensions_block = build_dimensions_block(footprint_mm, cell_divisions=cell_divisions)
     if power_scenario is None:
