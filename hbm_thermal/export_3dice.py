@@ -63,34 +63,49 @@ def _material_id_for_layer_name(material_name: str) -> str:
     return material_name
 
 
-def build_materials_block(material_spec: dict) -> str:
-    """재료명 -> {k_x, k_y, k_z} dict로부터 3D-ICE material 블록 텍스트를 만든다.
+_VHC_J_M3K_TO_J_UM3K = 1e-18  # J/(m³·K) -> J/(µm³·K)
 
-    volumetric heat capacity는 steady-state 해석에는 사용되지 않지만 3D-ICE
-    문법상 material 블록에 필수이므로, 물리적으로 타당한 대표값(Si 벌크
-    1.628e-12 J/(µm³·K), 3D-ICE 공식 예제 example_steady.stk 값)을 모든
-    재료에 공통 적용한다. steady-state 해에는 영향 없음(과도항에만 사용).
+
+def volumetric_heat_capacity_j_m3k_to_3dice(rho_cp_j_m3k: float) -> float:
+    """J/(m³·K) 체적 열용량을 3D-ICE 내부 단위(J/(µm³·K))로 변환한다.
+
+    검증 근거: docs/03-cross-validation-3d-ice.md §3 — 3D-ICE 공식 예제
+    example_steady.stk의 SILICON VHC 값(1.628e-12 J/µm³·K)이 Si 벌크
+    1.63e6 J/(m³·K)(=RHO_SI*CP_SI)와 오차 0.12%로 일치함을 손계산으로 확인.
+    """
+    return rho_cp_j_m3k * _VHC_J_M3K_TO_J_UM3K
+
+
+def build_materials_block(material_spec: dict) -> str:
+    """재료명 -> {k_x, k_y, k_z, rho_cp} dict로부터 3D-ICE material 블록 텍스트를 만든다.
+
+    volumetric heat capacity는 T1 균질화 rho_cp 실값(hbm_thermal.model_config.
+    build_material_spec()이 layer_stack_hbm2e()에서 레이어별 rho_cp를 재료
+    역할별로 취합한 값)을 사용한다 — steady-state 해석에는 영향이 없지만
+    (정상상태 방정식에 시간미분항 없음), transient 해석(P2 T3)에서는 τ=RC
+    시상수를 결정하는 핵심 물성이므로 placeholder를 쓰면 안 된다(경고:
+    hbm_thermal/rc_extract.py 모듈 docstring 참고 — 과거 placeholder
+    1.628e-12 J/µm³·K는 문법 통과용 Si 벌크 단일값이었고 재료별 실제 값이
+    아니었다).
 
     Args:
-        material_spec: build_material_spec() 결과.
+        material_spec: build_material_spec() 결과 — 각 값에 "rho_cp"(J/m³·K)
+            키가 있어야 한다(model_config.py T3 확장).
 
     Returns:
         3D-ICE .stk material 블록 전체 텍스트.
     """
-    # 근거: example_steady.stk의 SILICON VHC 값. steady 해석에서 열용량은
-    # 해에 영향을 주지 않으므로(정상상태 방정식에 시간미분항 없음) 공통값 사용.
-    vhc_placeholder = 1.628e-12
-
     blocks = []
     for mat_name, props in material_spec.items():
         mat_id = _material_id_for_layer_name(mat_name)
         kx = conductivity_w_mk_to_3dice(props["k_x"])
         ky = conductivity_w_mk_to_3dice(props["k_y"])
         kz = conductivity_w_mk_to_3dice(props["k_z"])
+        vhc = volumetric_heat_capacity_j_m3k_to_3dice(props["rho_cp"])
         blocks.append(
             f"material {mat_id} :\n"
             f"   thermal conductivity     {kx:.6e}, {ky:.6e}, {kz:.6e} ;\n"
-            f"   volumetric heat capacity {vhc_placeholder:.6e} ;\n"
+            f"   volumetric heat capacity {vhc:.6e} ;\n"
         )
     return "\n".join(blocks)
 
@@ -202,49 +217,105 @@ def build_die_blocks_and_stack(
     return "\n".join(die_blocks), stack_block
 
 
-def build_floorplan_file(footprint_mm: tuple[float, float], power_w: float | None) -> str:
+def build_floorplan_file(
+    footprint_mm: tuple[float, float], power_w: float | None, n_slots: int = 1
+) -> str:
     """단일 사각형 영역 floorplan(.flp) 텍스트를 만든다.
+
+    3D-ICE의 ``power values``는 슬롯별 전력 리스트다(문법: 콤마로 구분된
+    값 목록, 값 개수 = 시뮬레이션이 진행할 슬롯 수 — 값이 1개면 슬롯 1개
+    후 TDICE_END_OF_SIMULATION으로 종료됨을 실측 확인, bin/core.flp 등
+    3D-ICE 공식 예제에서 동일 값을 반복해 슬롯을 늘리는 패턴 확인). steady는
+    슬롯 개념이 없어 n_slots=1(기존 동작)이면 충분하지만, transient
+    스텝 응답(P2 T3)은 여러 슬롯에 걸쳐 동일한 상시 전력을 유지해야
+    시간축 전체를 시뮬레이션할 수 있으므로 같은 값을 n_slots번 반복한다.
 
     Args:
         footprint_mm: (x, y) 다이 풋프린트 (mm).
         power_w: 이 레이어의 전력(W). None이면 0W(비전력 레이어, layer 다이용).
+        n_slots: power values 리스트에 반복할 슬롯 수. steady(기본 1)는
+            영향 없음(steady solver는 슬롯 축 자체를 안 씀). transient에서는
+            시뮬레이션할 총 슬롯 수와 같아야 한다(호출측 책임).
 
     Returns:
         3D-ICE .flp 파일 전체 텍스트.
+
+    Raises:
+        ValueError: n_slots가 1 미만인 경우.
     """
+    if n_slots < 1:
+        raise ValueError(f"n_slots는 1 이상이어야 합니다 (입력값={n_slots}).")
+
     x_um = footprint_mm[0] * 1000.0
     y_um = footprint_mm[1] * 1000.0
     power = power_w if power_w is not None else 0.0
+    power_values = ", ".join(f"{power:.6f}" for _ in range(n_slots))
     return (
         "Whole :\n"
         "   position 0, 0 ;\n"
         f"   dimension {x_um:.4f}, {y_um:.4f} ;\n"
-        f"   power values {power:.6f} ;\n"
+        f"   power values {power_values} ;\n"
     )
 
 
-def build_output_block(die_names: list[str]) -> str:
+def build_output_block(die_names: list[str], transient: bool = False) -> str:
     """die별 평균/최대 온도를 파일로 export하는 output 블록을 만든다.
 
     Args:
         die_names: 온도를 추출할 die 이름 목록 (stack의 die 인스턴스명, die_ 접두어 아님).
+        transient: True면 매 slot(3D-ICE 문법상 ``, slot`` 인자, bison/
+            stack_description_parser.y의 TDICE_OUTPUT_INSTANT_SLOT)마다
+            평균 온도를 시계열로 기록한다(τ 피팅용, T3). False(기본, steady)면
+            해석 종료 시점(``final``) 값만 기록한다(기존 동작 무변경 — 회귀 방지).
 
     Returns:
         3D-ICE .stk output 블록 텍스트.
     """
+    instant = "average, slot" if transient else "average, final"
+    max_instant = "maximum, slot" if transient else "maximum, final"
     lines = ["output:"]
     for name in die_names:
-        lines.append(f'   Tflp ( {name}, "{name}_avg.txt", average, final ) ;')
-        lines.append(f'   Tflp ( {name}, "{name}_max.txt", maximum, final ) ;')
+        lines.append(f'   Tflp ( {name}, "{name}_avg.txt", {instant} ) ;')
+        lines.append(f'   Tflp ( {name}, "{name}_max.txt", {max_instant} ) ;')
     return "\n".join(lines) + "\n"
 
 
-def build_solver_block(ambient_c: float) -> str:
-    """steady-state solver 블록을 만든다."""
+def build_solver_block(
+    ambient_c: float,
+    transient: bool = False,
+    step_time_s: float = 0.01,
+    slot_time_s: float = 1.0,
+) -> str:
+    """solver 블록을 만든다 (steady 또는 transient).
+
+    Args:
+        ambient_c: 초기온도로 사용할 기준 온도 (°C). steady는 주변온도,
+            transient는 스텝 전력 인가 전 정상상태 온도를 넣는 것이 물리적으로
+            맞다(호출측 책임 — 이 함수는 그대로 켈빈 변환만 한다).
+        transient: True면 transient step-response solver 블록을 만든다
+            (bison 문법: ``transient step <StepTime>, slot <SlotTime> ;``,
+            docs/03-cross-validation-3d-ice.md 참고 문법 검증 절차와 동일하게
+            stack_description_parser.y 1752행대 확인). False(기본)면 기존
+            steady 블록 그대로 반환 — 회귀 방지.
+        step_time_s: transient 적분 스텝 크기 (초). SlotTime보다 작아야 하며
+            0보다 커야 한다(문법 파서가 검증, 3D-ICE-Emulator 실행 시 오류).
+        slot_time_s: transient 출력 슬롯 길이 (초). output 블록의 ``slot``
+            인스턴트가 이 주기로 기록된다.
+
+    Returns:
+        3D-ICE .stk solver 블록 텍스트.
+    """
     temp_k = celsius_to_kelvin(ambient_c)
+    if not transient:
+        return (
+            "solver:\n"
+            "   steady ;\n"
+            f"   initial temperature {temp_k:.4f} ;\n"
+            "   numofcores 1 ;\n"
+        )
     return (
         "solver:\n"
-        "   steady ;\n"
+        f"   transient step {step_time_s:.6f}, slot {slot_time_s:.6f} ;\n"
         f"   initial temperature {temp_k:.4f} ;\n"
         "   numofcores 1 ;\n"
     )
@@ -256,6 +327,11 @@ def build_stack_description(
     base_die_fraction: float = 0.55,
     ambient_c: float = 40.0,
     htc_w_m2k: float = 2500.0,
+    transient: bool = False,
+    initial_temperature_c: float | None = None,
+    step_time_s: float = 0.01,
+    slot_time_s: float = 1.0,
+    n_slots: int = 1,
 ) -> dict[str, str]:
     """전체 .stk 파일 + 레이어별 .flp 파일 텍스트를 한 번에 생성한다.
 
@@ -263,12 +339,34 @@ def build_stack_description(
     대상이 동등 조건이 되도록 한다: base_die 8.8W + DRAM die 8장 각 0.9W(=16W),
     ambient 40°C, 상단 HTC 2500 W/m²K, 전도 전용.
 
+    transient=True면 P2 T3(τ=RC 대조 검증)용 스텝 응답 입력을 생성한다 —
+    die/재료/BC 정의는 steady와 완전히 동일하고(교차검증 등가성 유지), solver와
+    output 블록만 transient 형식으로 바뀐다. 전력은 .flp에서 상시 total_power_w로
+    선언되므로(3D-ICE 문법에 시간축 전력 스케줄이 없음 — floorplan은 상수),
+    initial_temperature_c를 전력 인가 전 온도(보통 ambient)로 지정하면
+    t=0에서 전력이 계단형으로 인가되는 것과 동일한 효과를 낸다(초기값 ≠
+    최종 정상상태이므로 해가 시간에 따라 initial->steady로 지수적으로
+    수렴 — 이 상승 궤적이 τ 피팅 대상).
+
     Args:
         footprint_mm: (x, y) 다이 풋프린트 (mm).
         total_power_w: 스택 총 발열량 (W).
         base_die_fraction: base_die 전력 비율.
-        ambient_c: 주변 온도 (°C).
+        ambient_c: 주변 온도 (°C) — heat sink 블록의 BC 온도(steady/transient 공통).
         htc_w_m2k: 히트싱크 HTC (W/m²K).
+        transient: True면 transient 스텝 응답 입력 생성. False(기본)면 기존
+            steady 동작 그대로 — 회귀 방지.
+        initial_temperature_c: transient 초기온도(°C). None이면 ambient_c
+            사용(전력 인가 전 완전 냉각 상태 가정 — 가장 단순한 스텝 응답).
+            steady(transient=False)에서는 무시된다.
+        step_time_s: transient 적분 스텝 크기 (초, transient에서만 사용).
+        slot_time_s: transient 출력 슬롯 길이 (초, transient에서만 사용).
+        n_slots: transient 시뮬레이션할 총 슬롯 수(=총 시뮬레이션 시간 /
+            slot_time_s). 3D-ICE는 .flp의 power values 리스트 길이만큼만
+            슬롯을 진행하고 종료하므로(build_floorplan_file docstring 참고,
+            실측 확인) τ 피팅에 필요한 만큼(예: τ_analytic의 5~10배 구간을
+            덮도록) 호출측이 계산해 넘겨야 한다. steady(transient=False)에서는
+            무시된다(기존 동작 n_slots=1과 동치).
 
     Returns:
         {"stack.stk": 텍스트, "<layer>.flp" 또는 "<layer>_nopower.flp": 텍스트, ...} dict.
@@ -283,8 +381,14 @@ def build_stack_description(
     dimensions_block = build_dimensions_block(footprint_mm)
     die_blocks, stack_block = build_die_blocks_and_stack(geometry, power_spec)
     die_names_in_stack_order = [layer["name"] for layer in geometry]
-    output_block = build_output_block(die_names_in_stack_order)
-    solver_block = build_solver_block(ambient_c)
+    output_block = build_output_block(die_names_in_stack_order, transient=transient)
+    if transient:
+        solver_init_c = ambient_c if initial_temperature_c is None else initial_temperature_c
+        solver_block = build_solver_block(
+            solver_init_c, transient=True, step_time_s=step_time_s, slot_time_s=slot_time_s
+        )
+    else:
+        solver_block = build_solver_block(ambient_c)
 
     stk_text = "\n".join(
         [
@@ -298,11 +402,12 @@ def build_stack_description(
         ]
     )
 
+    flp_n_slots = n_slots if transient else 1
     files = {"stack.stk": stk_text}
     for layer in geometry:
         name = layer["name"]
         power_w = power_spec.get(name)
-        flp_text = build_floorplan_file(footprint_mm, power_w)
+        flp_text = build_floorplan_file(footprint_mm, power_w, n_slots=flp_n_slots)
         flp_name = f"{name}.flp" if name in power_spec else f"{name}_nopower.flp"
         files[flp_name] = flp_text
 

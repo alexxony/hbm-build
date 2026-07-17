@@ -5,3 +5,8 @@ __pycache__/
 # OMC/세션 상태 파일 (커밋 금지)
 .omc/
 *.jsonl
+
+# 3D-ICE 로컬 실행 중간 산출물 (.stk/.flp/온도 출력 텍스트, 재현 스크립트로 재생성 가능)
+results/3dice_work/
+results/3dice_transient_work/
+results/3dice_transient_work_steady_ref/

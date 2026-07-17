@@ -58,10 +58,14 @@ class TestBuildMaterialsBlock:
         assert text.count("volumetric heat capacity") == len(material_spec)
 
     def test_scaled_values_match_conversion(self):
-        material_spec = {"test_mat": {"k_x": 148.0, "k_y": 148.0, "k_z": 150.0}}
+        material_spec = {
+            "test_mat": {"k_x": 148.0, "k_y": 148.0, "k_z": 150.0, "rho_cp": 1.63e6}
+        }
         text = build_materials_block(material_spec)
         assert "1.480000e-04" in text
         assert "1.500000e-04" in text
+        # rho_cp 1.63e6 J/(m3.K) -> 1.63e-12 J/(um3.K) (T1 실값 변환 확인, placeholder 아님)
+        assert "1.630000e-12" in text
 
 
 class TestBuildHeatSinkBlock:

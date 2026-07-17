@@ -80,7 +80,7 @@ def _material_name_for_layer(layer: dict) -> str:
 
 
 def build_material_spec(stack: list[dict] | None = None) -> dict:
-    """레이어 스택으로부터 재료명 -> 이방성 열전도율 dict를 만든다.
+    """레이어 스택으로부터 재료명 -> 이방성 열전도율 + 체적 열용량 dict를 만든다.
 
     같은 역할(재료명)을 갖는 레이어들은 물성이 동일해야 하며, 그렇지 않으면
     ValueError를 낸다 (균질화 가정이 깨졌다는 신호).
@@ -89,8 +89,10 @@ def build_material_spec(stack: list[dict] | None = None) -> dict:
         stack: layer_stack_hbm2e() 형식의 레이어 dict 목록. None이면 기본 스택 사용.
 
     Returns:
-        재료명 -> {"k_x": float, "k_y": float, "k_z": float} dict.
-        k_x == k_y == 레이어의 k_xy (면내 등방 가정), k_z는 레이어의 k_z.
+        재료명 -> {"k_x": float, "k_y": float, "k_z": float, "rho_cp": float} dict.
+        k_x == k_y == 레이어의 k_xy (면내 등방 가정), k_z는 레이어의 k_z,
+        rho_cp는 레이어의 체적 열용량(J/m³·K, T1 hbm_thermal.homogenize 균질화 값 —
+        3D-ICE placeholder가 아닌 실값. P2 T3 export_3dice.py transient 확장에 사용).
     """
     if stack is None:
         stack = layer_stack_hbm2e()
@@ -98,7 +100,12 @@ def build_material_spec(stack: list[dict] | None = None) -> dict:
     materials: dict[str, dict] = {}
     for layer in stack:
         mat_name = _material_name_for_layer(layer)
-        props = {"k_x": layer["k_xy"], "k_y": layer["k_xy"], "k_z": layer["k_z"]}
+        props = {
+            "k_x": layer["k_xy"],
+            "k_y": layer["k_xy"],
+            "k_z": layer["k_z"],
+            "rho_cp": layer["rho_cp"],
+        }
         if mat_name in materials:
             existing = materials[mat_name]
             if existing != props:

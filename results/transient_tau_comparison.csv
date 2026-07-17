@@ -1,0 +1,2 @@
+die,tau_fitted_s,tau_analytic_s,diff_pct,r_squared,verdict,criterion,t_initial_k,t_final_k,n_points_used,sim_duration_s,n_slots
+base_die,0.555822,0.579229,4.0411,0.999996,PASS,"|Δτ|/τ_analytic ≤ 50% (분포 RC->2노드 lumped 축약 1차 근사 허용오차, steady 10%보다 완화) AND R² ≥ 0.99 (1차 지수 적합도)",320.1960,387.8950,92,4.6338,92
