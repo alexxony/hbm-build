@@ -7,6 +7,9 @@ import pytest
 
 from hbm_thermal.homogenize import layer_stack_hbm2e, total_stack_height_um
 from hbm_thermal.model_config import (
+    BASE_DIE_BLOCK_NAMES,
+    BASE_DIE_BLOCK_WIDTH_FRACTIONS,
+    POWER_SCENARIOS,
     build_geometry_spec,
     build_material_spec,
     build_power_spec,
@@ -153,3 +156,152 @@ class TestBuildPowerSpec:
         # 기존 동작 회귀 방지: stack 인자 없으면 8-Hi(9개 항목) 그대로.
         power = build_power_spec(total_w=16.0, base_die_fraction=0.55)
         assert len(power) == 9
+
+
+class TestBuildPowerSpecBlockScenarios:
+    """P3 T1: power_scenario 지정 시 base_die 블록별(PHY/TSVA/DA) 전력 배분."""
+
+    def test_power_scenario_none_is_unchanged_legacy_behavior(self):
+        # 하위 호환: power_scenario=None이면 기존 dict(base_die 단일 키)와 동일.
+        legacy = build_power_spec(total_w=16.0, base_die_fraction=0.55)
+        explicit_none = build_power_spec(
+            total_w=16.0, base_die_fraction=0.55, power_scenario=None
+        )
+        assert legacy == explicit_none
+        assert "base_die" in explicit_none
+        for block_name in BASE_DIE_BLOCK_NAMES:
+            assert block_name not in explicit_none
+
+    def test_unknown_power_scenario_raises(self):
+        with pytest.raises(ValueError):
+            build_power_spec(total_w=16.0, base_die_fraction=0.55, power_scenario="bogus")
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_block_sum_equals_base_power_and_total_preserved(self, scenario):
+        # 전력 보존 불변식: 블록 합 = base_power_w, 총합 = total_w.
+        total_w = 16.0
+        base_die_fraction = 0.55
+        power = build_power_spec(
+            total_w=total_w, base_die_fraction=base_die_fraction, power_scenario=scenario
+        )
+        base_power_w = total_w * base_die_fraction
+        block_sum = sum(power[name] for name in BASE_DIE_BLOCK_NAMES)
+        assert block_sum == pytest.approx(base_power_w)
+        assert sum(power.values()) == pytest.approx(total_w)
+        assert "base_die" not in power
+
+    def test_s0_uniform_matches_area_proportional_split(self):
+        # S0 uniform 시나리오는 폭 비율(면적 비례)과 동일한 블록별 전력 배분이어야 한다
+        # (기존 균일 배분과 물리적으로 등가라는 §1.2 회귀 게이트).
+        total_w = 16.0
+        base_die_fraction = 0.55
+        power = build_power_spec(
+            total_w=total_w, base_die_fraction=base_die_fraction, power_scenario="s0_uniform"
+        )
+        base_power_w = total_w * base_die_fraction
+        for block_name in BASE_DIE_BLOCK_NAMES:
+            expected = base_power_w * BASE_DIE_BLOCK_WIDTH_FRACTIONS[block_name]
+            assert power[block_name] == pytest.approx(expected)
+
+    def test_s1_and_s2_scenarios_favor_phy_block(self):
+        # 문헌 방향성(PHY 우세) 확인: s1/s2에서 PHY 블록 전력이 TSVA/DA보다 크다.
+        for scenario in ("s1_phy_moderate", "s2_phy_heavy"):
+            power = build_power_spec(
+                total_w=16.0, base_die_fraction=0.55, power_scenario=scenario
+            )
+            assert power["base_die_phy"] > power["base_die_tsva"]
+            assert power["base_die_phy"] > power["base_die_da"]
+
+    def test_dram_die_power_unaffected_by_power_scenario(self):
+        # base_die 블록 분할은 DRAM/top_die 배분에 영향을 주지 않아야 한다.
+        legacy = build_power_spec(total_w=16.0, base_die_fraction=0.55)
+        scenario_power = build_power_spec(
+            total_w=16.0, base_die_fraction=0.55, power_scenario="s1_phy_moderate"
+        )
+        dram_names = [f"dram_die_{i}" for i in range(1, 8)] + ["top_die"]
+        for name in dram_names:
+            assert scenario_power[name] == pytest.approx(legacy[name])
+
+
+class TestBuildGeometrySpecBlockScenarios:
+    """P3 T1: power_scenario 지정 시 base_die 지오메트리 x방향 3분할."""
+
+    def test_power_scenario_none_is_unchanged_legacy_behavior(self):
+        legacy = build_geometry_spec()
+        explicit_none = build_geometry_spec(power_scenario=None)
+        assert legacy == explicit_none
+        names = [layer["name"] for layer in explicit_none]
+        assert "base_die" in names
+        for block_name in BASE_DIE_BLOCK_NAMES:
+            assert block_name not in names
+
+    def test_unknown_power_scenario_raises(self):
+        with pytest.raises(ValueError):
+            build_geometry_spec(power_scenario="bogus")
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_base_die_replaced_by_three_sub_boxes(self, scenario):
+        geometry = build_geometry_spec(power_scenario=scenario)
+        names = [layer["name"] for layer in geometry]
+        assert "base_die" not in names
+        for block_name in BASE_DIE_BLOCK_NAMES:
+            assert block_name in names
+        # 레이어 총 개수는 base_die 1개가 3개로 늘어난 만큼 +2.
+        assert len(geometry) == len(build_geometry_spec()) + 2
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_sub_box_widths_sum_to_footprint_x(self, scenario):
+        footprint_mm = (11.0, 10.0)
+        geometry = build_geometry_spec(footprint_mm=footprint_mm, power_scenario=scenario)
+        blocks = {layer["name"]: layer for layer in geometry if layer["name"] in BASE_DIE_BLOCK_NAMES}
+        width_sum = sum(blocks[name]["size_mm"][0] for name in BASE_DIE_BLOCK_NAMES)
+        assert width_sum == pytest.approx(footprint_mm[0])
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_sub_boxes_share_same_z_slice_and_yz_dims(self, scenario):
+        footprint_mm = (11.0, 10.0)
+        geometry = build_geometry_spec(footprint_mm=footprint_mm, power_scenario=scenario)
+        legacy_base = next(
+            layer for layer in build_geometry_spec(footprint_mm=footprint_mm) if layer["name"] == "base_die"
+        )
+        for block_name in BASE_DIE_BLOCK_NAMES:
+            block = next(layer for layer in geometry if layer["name"] == block_name)
+            assert block["origin_mm"][2] == pytest.approx(legacy_base["origin_mm"][2])
+            assert block["size_mm"][2] == pytest.approx(legacy_base["size_mm"][2])
+            assert block["size_mm"][1] == pytest.approx(footprint_mm[1])
+            assert block["material_name"] == legacy_base["material_name"]
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_sub_boxes_are_contiguous_non_overlapping_in_x(self, scenario):
+        geometry = build_geometry_spec(power_scenario=scenario)
+        blocks = [layer for layer in geometry if layer["name"] in BASE_DIE_BLOCK_NAMES]
+        # BASE_DIE_BLOCK_NAMES 순서(PHY, TSVA, DA)대로 x가 이어 붙는지 확인.
+        blocks_by_name = {layer["name"]: layer for layer in blocks}
+        ordered = [blocks_by_name[name] for name in BASE_DIE_BLOCK_NAMES]
+        for i in range(1, len(ordered)):
+            prev = ordered[i - 1]
+            cur = ordered[i]
+            prev_right_edge = prev["origin_mm"][0] + prev["size_mm"][0]
+            assert cur["origin_mm"][0] == pytest.approx(prev_right_edge)
+
+    def test_stack_z_height_unchanged_by_power_scenario(self):
+        # z 스택 높이 불변: base_die 분할이 총 높이에 영향을 주지 않는다.
+        # 주의: total_stack_height_mm()은 레이어별 dz를 단순 합산하므로
+        # 동일 z 슬라이스를 공유하는 x분할 sub-box가 여러 개면 중복 합산된다
+        # (레이어=z 스택 1개라는 기존 가정 전제) — 여기서는 실제 물리적
+        # 최상단 z(마지막 레이어의 origin_mm[2] + size_mm[2])로 직접 비교한다.
+        def top_z_mm(geometry):
+            return max(layer["origin_mm"][2] + layer["size_mm"][2] for layer in geometry)
+
+        legacy_top = top_z_mm(build_geometry_spec())
+        scenario_top = top_z_mm(build_geometry_spec(power_scenario="s2_phy_heavy"))
+        assert scenario_top == pytest.approx(legacy_top)
+
+    def test_layers_after_base_die_still_stack_cumulatively(self):
+        # base_die 분할 후에도 나머지 레이어(bump_layer 등)의 z 누적이 끊기지 않는지 확인.
+        geometry = build_geometry_spec(power_scenario="s0_uniform")
+        da_block = next(layer for layer in geometry if layer["name"] == "base_die_da")
+        da_top_z = da_block["origin_mm"][2] + da_block["size_mm"][2]
+        next_layer_index = geometry.index(da_block) + 1
+        next_layer = geometry[next_layer_index]
+        assert next_layer["origin_mm"][2] == pytest.approx(da_top_z, abs=1e-9)
