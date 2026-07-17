@@ -82,6 +82,16 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--bottom-htc",
+        type=float,
+        default=None,
+        help=(
+            "스택 최하단(base_die 하부면)에 추가할 고정 HTC (W/m^2K). "
+            "기본 None = 기존 top-only 냉각(하위 호환). 지정 시 top+bottom "
+            "양면 냉각 BC로 해석한다 (P4 B계열, docs/08-p4-highpower-design.md §2.1)."
+        ),
+    )
+    parser.add_argument(
         "--footprint-mm",
         type=float,
         nargs=2,
@@ -365,6 +375,7 @@ def build_and_solve(
     power_spec: dict,
     mesh_region_resolution: int,
     transient: bool,
+    bottom_htc_w_m2k: float | None = None,
 ) -> bool:
     """단발성 해석(Task 2, build_icepak_model())용 편의 래퍼.
 
@@ -383,11 +394,15 @@ def build_and_solve(
         power_spec: build_power_spec() 결과.
         mesh_region_resolution: global mesh region의 MeshRegionResolution (정수 1~5).
         transient: True면 과도 해석 모드로 전환.
+        bottom_htc_w_m2k: 주어지면 스택 최하단에도 HTC BC를 추가한다
+            (P4 B계열, top+bottom 냉각). None이면 기존 top-only 동작.
 
     Returns:
         ipk.analyze()의 반환값(bool) — True면 해석 성공.
     """
-    build_geometry_materials_bcs(ipk, stack_geometry, material_spec, power_spec)
+    build_geometry_materials_bcs(
+        ipk, stack_geometry, material_spec, power_spec, bottom_htc_w_m2k=bottom_htc_w_m2k
+    )
     create_conduction_setup(ipk, transient)
     return solve_at_mesh_resolution(ipk, mesh_region_resolution)
 
@@ -431,6 +446,7 @@ def build_icepak_model(args: argparse.Namespace) -> None:
             power_spec=power_spec,
             mesh_region_resolution=mesh_region_resolution,
             transient=args.transient,
+            bottom_htc_w_m2k=args.bottom_htc,
         )
         if not analyze_ok:
             print(

@@ -56,6 +56,28 @@ class TestCliPowerScenarioArg:
             sys.argv = argv_backup
 
 
+class TestCliBottomHtcArg:
+    """P4 T1: --bottom-htc CLI 플래그 (기본 None=top-only, 지정 시 top+bottom)."""
+
+    def test_bottom_htc_defaults_to_none(self):
+        argv_backup = sys.argv
+        try:
+            sys.argv = ["build_icepak_model.py"]
+            args = bim._parse_args()
+        finally:
+            sys.argv = argv_backup
+        assert args.bottom_htc is None
+
+    def test_bottom_htc_accepts_float_value(self):
+        argv_backup = sys.argv
+        try:
+            sys.argv = ["build_icepak_model.py", "--bottom-htc", "2500.0"]
+            args = bim._parse_args()
+        finally:
+            sys.argv = argv_backup
+        assert args.bottom_htc == pytest.approx(2500.0)
+
+
 class TestSpecAssemblyNoneModeUnchanged:
     """power_scenario=None일 때 기존 스펙(17 레이어, 9 전력키)과 완전히 동일해야 한다."""
 

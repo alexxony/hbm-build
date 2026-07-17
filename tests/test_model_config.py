@@ -223,6 +223,40 @@ class TestBuildPowerSpecBlockScenarios:
             assert scenario_power[name] == pytest.approx(legacy[name])
 
 
+class TestBuildPowerSpecHighPower30W:
+    """P4 T1: total_w=30.0(KAIST 크로스오버 상회 영역) 전력 보존 게이트 G1.
+
+    docs/08-p4-highpower-design.md §2.3 G1 — sum(power_spec) == total_w는
+    power_scenario 값과 무관하게 항상 성립해야 한다(전력 배분 로직은
+    total_w에 선형 비례하므로 16W에서 성립하면 30W에서도 성립해야 하지만,
+    P4가 명시적으로 사전 등록한 회귀 게이트이므로 별도 테스트로 고정한다).
+    """
+
+    @pytest.mark.parametrize(
+        "scenario", [None, "s0_uniform", "s1_phy_moderate", "s2_phy_heavy"]
+    )
+    def test_total_power_preserved_at_30w(self, scenario):
+        power = build_power_spec(
+            total_w=30.0, base_die_fraction=0.55, power_scenario=scenario
+        )
+        assert sum(power.values()) == pytest.approx(30.0)
+
+    @pytest.mark.parametrize(
+        "scenario", [None, "s0_uniform", "s1_phy_moderate", "s2_phy_heavy"]
+    )
+    def test_base_die_series_sums_to_16_5w(self, scenario):
+        # base_die_fraction=0.55 * total_w=30.0 -> base 계열 합 = 16.5W.
+        # power_scenario=None: "base_die" 단일 키. 그 외: 3블록 합.
+        power = build_power_spec(
+            total_w=30.0, base_die_fraction=0.55, power_scenario=scenario
+        )
+        if scenario is None:
+            base_series_sum = power["base_die"]
+        else:
+            base_series_sum = sum(power[name] for name in BASE_DIE_BLOCK_NAMES)
+        assert base_series_sum == pytest.approx(16.5)
+
+
 class TestBuildGeometrySpecBlockScenarios:
     """P3 T1: power_scenario 지정 시 base_die 지오메트리 x방향 3분할."""
 
