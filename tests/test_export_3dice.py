@@ -218,12 +218,24 @@ class TestBuildStackDescription:
 
 
 class TestBuildStackDescriptionPowerScenario:
-    """P3 T3 — power_scenario 관통(base_die 다중 element/die 확장) 계약 테스트.
+    """P3 T5 — power_scenario 관통(base_die 단일 die + 다중 floorplan element) 계약 테스트.
 
-    docs/07-p3-power-map-design.md §2 T3. build_die_blocks_and_stack()는
-    geometry 리스트 원소 개수에 무관하게 동작하므로(1 원소 = 1 die),
-    별도 .flp 다중 element 문법 확장 없이 power_scenario가 3개 sub-die로
-    자연 확장됨을 검증한다(리스크1 해소 근거).
+    docs/07-p3-power-map-design.md §2 T5. **T3의 원래 계약은 오매핑이었다**:
+    base_die_phy/tsva/da 3개 geometry sub-box를 3D-ICE die 3개로 그대로
+    매핑했는데, 이 함수는 각 die에 build_floorplan_file()(항상 position 0,0 /
+    전체 footprint)을 발급해 xy 분할이 z축(수직) 적층으로 둔갑했다(base_die
+    60um 1층이 60um die 3개 적층 180um가 됨 — 실측 확인, T3 커밋의
+    build_stack_description(power_scenario=...) 반환 dict가 base_die_phy.flp
+    등 3개 파일 모두 전체 footprint였음).
+
+    정정본 계약: base_die는 항상 **단일 die**(None 경로와 동일 60um 1층)로
+    유지되고, 그 die의 base_die.flp 하나에 블록별 named element 3개
+    (phy/tsva/da)가 올바른 x-offset/폭으로 기입된다(3D-ICE .flp 문법이 파일
+    하나에 다중 element를 허용함을 공식 예제 bin/core.flp로 실측 확인,
+    bison/floorplan_parser.y IDENTIFIER 목록 문법과 일치). 온도 출력은 die
+    단위 Tflp 대신 element 단위 Tflpel(die.element_id, ...)을 쓴다
+    (bison/stack_description_parser.y "TFLPEL '(' IDENTIFIER '.' IDENTIFIER
+    ..." 문법 실측 확인).
     """
 
     def test_none_scenario_unchanged(self):
@@ -241,15 +253,17 @@ class TestBuildStackDescriptionPowerScenario:
             build_stack_description(power_scenario="no_such_scenario")
 
     @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
-    def test_scenario_replaces_base_die_with_three_blocks(self, scenario):
+    def test_scenario_keeps_base_die_as_single_merged_die(self, scenario):
+        # base_die_phy/tsva/da는 개별 .flp로 늘어나지 않는다 — base_die.flp
+        # 하나로 병합된다(None 경로와 동일 die/파일 수 유지, 회귀 방지).
         files = build_stack_description(power_scenario=scenario)
-        assert "base_die.flp" not in files
+        assert "base_die.flp" in files
         for name in BASE_DIE_BLOCK_NAMES:
-            assert f"{name}.flp" in files
-        geometry = build_geometry_spec(power_scenario=scenario)
-        # stack.stk + flp 파일 개수가 geometry 레이어 수와 정확히 일치해야 한다
-        # (die 정의가 geometry 원소 개수에 1:1 대응 — 다중 .flp element 불필요).
-        assert len(files) == 1 + len(geometry)
+            assert f"{name}.flp" not in files
+        geometry_none = build_geometry_spec(power_scenario=None)
+        # stack.stk + flp 파일 개수는 None 경로(17레이어)와 정확히 일치해야
+        # 한다 — power_scenario는 base_die 내부 전력 분포에만 영향을 준다.
+        assert len(files) == 1 + len(geometry_none)
 
     @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
     def test_scenario_preserves_total_power(self, scenario):
@@ -266,28 +280,83 @@ class TestBuildStackDescriptionPowerScenario:
         assert total == pytest.approx(16.0)
 
     @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
-    def test_scenario_die_blocks_each_have_one_source(self, scenario):
-        # base_die가 3 die로 늘어나도 3D-ICE 문법 제약(die당 source 정확히
-        # 1개)이 그대로 지켜져야 한다(export_3dice.build_die_blocks_and_stack
-        # docstring 참고).
+    def test_scenario_base_die_is_single_die_with_one_source(self, scenario):
+        # base_die는 항상 단일 die(60um 1층)를 유지한다 — 3D-ICE 문법 제약
+        # (die당 source 정확히 1개)과 None 경로 스택 두께가 그대로 보존된다.
         files = build_stack_description(power_scenario=scenario)
         stk = files["stack.stk"]
+        assert "die die_base_die :\n   source" in stk
         for name in BASE_DIE_BLOCK_NAMES:
-            assert f"die die_{name} :\n   source" in stk
+            assert f"die die_{name} :\n   source" not in stk
 
-    def test_s0_uniform_stack_order_groups_base_die_blocks_at_bottom(self):
-        # s0_uniform은 기존 단일 base_die 배분과 물리적으로 등가여야 하므로
-        # 3 sub-die가 스택 최하단(stack: 블록에서 마지막 3개)에 그룹으로
-        # 위치해야 한다 — 순서 반전 없이 다른 레이어와 동일한 규칙 적용.
-        files = build_stack_description(power_scenario="s0_uniform")
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_scenario_stack_die_count_matches_none_path(self, scenario):
+        # stack: 블록의 die 참조 개수가 None 경로(17개)와 동일해야 한다 —
+        # power_scenario가 스택 층수를 바꾸지 않는다(T3 오매핑 정정 핵심).
+        files_none = build_stack_description(power_scenario=None)
+        files_scenario = build_stack_description(power_scenario=scenario)
+        stk_none = files_none["stack.stk"]
+        stk_scenario = files_scenario["stack.stk"]
+
+        def _die_ref_count(stk_text: str) -> int:
+            return sum(
+                1
+                for line in stk_text.splitlines()
+                if line.strip().startswith("die ") and "floorplan" in line
+            )
+
+        assert _die_ref_count(stk_scenario) == _die_ref_count(stk_none)
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_scenario_base_die_flp_has_three_named_elements(self, scenario):
+        # base_die.flp 하나에 phy/tsva/da 3개 named element가 있어야 한다
+        # (3D-ICE 공식 예제 bin/core.flp 다중 element 문법과 동일 패턴).
+        files = build_stack_description(power_scenario=scenario)
+        content = files["base_die.flp"]
+        for element_id in ("phy", "tsva", "da"):
+            assert f"{element_id} :" in content
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_scenario_base_die_elements_do_not_overlap_and_span_full_width(self, scenario):
+        # 각 element의 position(x)/dimension(x)이 실제 블록 위치를 반영해야
+        # 하며(오매핑 방지 — 전부 position 0,0에 전체 footprint를 쓰던 T3
+        # 버그의 회귀 게이트), 폭 합이 footprint 전폭과 일치해야 한다.
+        files = build_stack_description(power_scenario=scenario, footprint_mm=(11.0, 10.0))
+        content = files["base_die.flp"]
+
+        positions = {}
+        widths = {}
+        current_id = None
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.endswith(":"):
+                current_id = stripped.rstrip(" :")
+            elif stripped.startswith("position") and current_id:
+                x_str = stripped.split("position")[1].rstrip(" ;").split(",")[0]
+                positions[current_id] = float(x_str)
+            elif stripped.startswith("dimension") and current_id:
+                x_str = stripped.split("dimension")[1].rstrip(" ;").split(",")[0]
+                widths[current_id] = float(x_str)
+
+        assert set(positions) == {"phy", "tsva", "da"}
+        # 최소 하나는 x=0에서 시작해야 하고(가장 왼쪽 블록), 전 구간이
+        # 겹치지 않고 전체 11000um을 채워야 한다(정렬 후 연속성 확인).
+        ordered = sorted(positions, key=lambda k: positions[k])
+        cursor = 0.0
+        for element_id in ordered:
+            assert positions[element_id] == pytest.approx(cursor)
+            cursor += widths[element_id]
+        assert cursor == pytest.approx(11000.0)
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_scenario_output_block_uses_tflpel_for_base_die_blocks(self, scenario):
+        # base_die는 die 단위 Tflp 대신 블록별 Tflpel을 써야 한다(문법:
+        # Tflpel ( base_die.<element_id>, "path", average|maximum, final ) ;).
+        files = build_stack_description(power_scenario=scenario)
         stk = files["stack.stk"]
-        lines = [
-            l.strip() for l in stk.splitlines() if l.strip().startswith("die ")
-        ]
-        # 최상단 die 목록(die_ 정의부 아닌 stack 참조부) 중 마지막 3개.
-        stack_refs = [l for l in lines if " die_" in l and "floorplan" in l]
-        last_three_names = {ref.split()[1] for ref in stack_refs[-3:]}
-        assert last_three_names == set(BASE_DIE_BLOCK_NAMES)
+        assert "Tflp ( base_die," not in stk
+        for element_id in ("phy", "tsva", "da"):
+            assert f"Tflpel ( base_die.{element_id}," in stk
 
     def test_s0_uniform_matches_area_fraction_power_split(self):
         # s0_uniform은 면적비(BASE_DIE_BLOCK_WIDTH_FRACTIONS) 배분과 물리적으로
@@ -295,10 +364,18 @@ class TestBuildStackDescriptionPowerScenario:
         power_spec = build_power_spec(power_scenario="s0_uniform")
         files = build_stack_description(power_scenario="s0_uniform")
         base_power_w = 16.0 * 0.55
+        content = files["base_die.flp"]
+        element_ids = {
+            "base_die_phy": "phy",
+            "base_die_tsva": "tsva",
+            "base_die_da": "da",
+        }
         for name in BASE_DIE_BLOCK_NAMES:
-            content = files[f"{name}.flp"]
-            line = next(l for l in content.splitlines() if "power values" in l)
-            written_power = float(line.split("power values")[1].rstrip(" ;").strip())
+            element_id = element_ids[name]
+            lines = content.splitlines()
+            start = next(i for i, l in enumerate(lines) if l.strip() == f"{element_id} :")
+            power_line = next(l for l in lines[start:] if "power values" in l)
+            written_power = float(power_line.split("power values")[1].rstrip(" ;").strip())
             expected_power = base_power_w * BASE_DIE_BLOCK_WIDTH_FRACTIONS[name]
             assert written_power == pytest.approx(power_spec[name])
             assert written_power == pytest.approx(expected_power)
