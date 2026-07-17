@@ -332,6 +332,7 @@ def build_stack_description(
     step_time_s: float = 0.01,
     slot_time_s: float = 1.0,
     n_slots: int = 1,
+    power_scenario: str | None = None,
 ) -> dict[str, str]:
     """전체 .stk 파일 + 레이어별 .flp 파일 텍스트를 한 번에 생성한다.
 
@@ -347,6 +348,19 @@ def build_stack_description(
     t=0에서 전력이 계단형으로 인가되는 것과 동일한 효과를 낸다(초기값 ≠
     최종 정상상태이므로 해가 시간에 따라 initial->steady로 지수적으로
     수렴 — 이 상승 궤적이 τ 피팅 대상).
+
+    power_scenario가 None이면 기존 동작을 완전히 보존한다(base_die 단일
+    die, 회귀 방지). POWER_SCENARIOS 키(예: "s0_uniform")를 넘기면
+    model_config.build_geometry_spec()/build_power_spec()이 base_die를
+    base_die_phy/tsva/da 3개 sub-box로 분할한다(P3 T1, MHS 블록별 전력맵 —
+    docs/07-p3-power-map-design.md §1.3). die 정의·floorplan 생성 로직
+    (아래 for 루프, build_die_blocks_and_stack())은 geometry 리스트 원소
+    개수에 완전히 무관하게 동작하도록 이미 작성되어 있다 — geometry의 각
+    원소가 독립된 die(정확히 1개의 source 층)로 매핑되므로, base_die가
+    1개 box에서 3개 sub-box로 늘어나도 "die당 다중 floorplan element"
+    같은 별도 .flp 다중 요소 문법 확장이 불필요하다(P3 설계 문서 §3
+    리스크1 — 3 sub-box는 3개의 독립된 die로 자연 수용됨, die 분해 우회로
+    전환할 필요 없이 기존 1 geometry-entry = 1 die 모델이 그대로 확장됨).
 
     Args:
         footprint_mm: (x, y) 다이 풋프린트 (mm).
@@ -367,14 +381,25 @@ def build_stack_description(
             실측 확인) τ 피팅에 필요한 만큼(예: τ_analytic의 5~10배 구간을
             덮도록) 호출측이 계산해 넘겨야 한다. steady(transient=False)에서는
             무시된다(기존 동작 n_slots=1과 동치).
+        power_scenario: model_config.POWER_SCENARIOS 키. None이면 base_die
+            단일 die(기존 동작, 하위 호환). 지정 시 base_die_phy/tsva/da
+            3개 die로 분할되고, base_power_w가 해당 시나리오 비율대로
+            배분된다(P3 T3). "s0_uniform"은 면적 비례 배분 — 기존 단일
+            base_die 배분과 물리적으로 등가라 회귀 게이트로 쓴다.
 
     Returns:
         {"stack.stk": 텍스트, "<layer>.flp" 또는 "<layer>_nopower.flp": 텍스트, ...} dict.
-        키는 파일명, 값은 해당 파일에 쓸 텍스트.
+        키는 파일명, 값은 해당 파일에 쓸 텍스트. power_scenario 지정 시
+        base_die.flp 대신 base_die_phy.flp/base_die_tsva.flp/base_die_da.flp
+        3개 파일로 대체된다.
     """
-    geometry = build_geometry_spec(footprint_mm=footprint_mm)
+    geometry = build_geometry_spec(footprint_mm=footprint_mm, power_scenario=power_scenario)
     material_spec = build_material_spec()
-    power_spec = build_power_spec(total_w=total_power_w, base_die_fraction=base_die_fraction)
+    power_spec = build_power_spec(
+        total_w=total_power_w,
+        base_die_fraction=base_die_fraction,
+        power_scenario=power_scenario,
+    )
 
     materials_block = build_materials_block(material_spec)
     heat_sink_block = build_heat_sink_block(htc_w_m2k, ambient_c)

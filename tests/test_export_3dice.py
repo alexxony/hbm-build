@@ -18,7 +18,14 @@ from hbm_thermal.export_3dice import (
     conductivity_w_mk_to_3dice,
     htc_w_m2k_to_3dice,
 )
-from hbm_thermal.model_config import build_geometry_spec, build_material_spec, build_power_spec
+from hbm_thermal.model_config import (
+    BASE_DIE_BLOCK_NAMES,
+    BASE_DIE_BLOCK_WIDTH_FRACTIONS,
+    POWER_SCENARIOS,
+    build_geometry_spec,
+    build_material_spec,
+    build_power_spec,
+)
 
 
 class TestUnitConversions:
@@ -208,3 +215,90 @@ class TestBuildStackDescription:
             if fname == "stack.stk":
                 continue
             assert f'"./{fname}"' in stk
+
+
+class TestBuildStackDescriptionPowerScenario:
+    """P3 T3 — power_scenario 관통(base_die 다중 element/die 확장) 계약 테스트.
+
+    docs/07-p3-power-map-design.md §2 T3. build_die_blocks_and_stack()는
+    geometry 리스트 원소 개수에 무관하게 동작하므로(1 원소 = 1 die),
+    별도 .flp 다중 element 문법 확장 없이 power_scenario가 3개 sub-die로
+    자연 확장됨을 검증한다(리스크1 해소 근거).
+    """
+
+    def test_none_scenario_unchanged(self):
+        # power_scenario=None(기본값)은 기존 파일 집합과 완전히 동일해야 한다.
+        files_default = build_stack_description()
+        files_explicit_none = build_stack_description(power_scenario=None)
+        assert files_default == files_explicit_none
+        assert "base_die.flp" in files_default
+        assert set(files_default.keys()).isdisjoint(
+            {f"{name}.flp" for name in BASE_DIE_BLOCK_NAMES}
+        )
+
+    def test_unknown_scenario_raises(self):
+        with pytest.raises(ValueError):
+            build_stack_description(power_scenario="no_such_scenario")
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_scenario_replaces_base_die_with_three_blocks(self, scenario):
+        files = build_stack_description(power_scenario=scenario)
+        assert "base_die.flp" not in files
+        for name in BASE_DIE_BLOCK_NAMES:
+            assert f"{name}.flp" in files
+        geometry = build_geometry_spec(power_scenario=scenario)
+        # stack.stk + flp 파일 개수가 geometry 레이어 수와 정확히 일치해야 한다
+        # (die 정의가 geometry 원소 개수에 1:1 대응 — 다중 .flp element 불필요).
+        assert len(files) == 1 + len(geometry)
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_scenario_preserves_total_power(self, scenario):
+        # 전력 보존 불변식: 시나리오와 무관하게 총합은 total_power_w와 일치.
+        files = build_stack_description(power_scenario=scenario, total_power_w=16.0)
+        total = 0.0
+        for fname, content in files.items():
+            if fname == "stack.stk":
+                continue
+            for line in content.splitlines():
+                if "power values" in line:
+                    values_part = line.split("power values")[1].rstrip(" ;")
+                    total += sum(float(v) for v in values_part.split(","))
+        assert total == pytest.approx(16.0)
+
+    @pytest.mark.parametrize("scenario", sorted(POWER_SCENARIOS))
+    def test_scenario_die_blocks_each_have_one_source(self, scenario):
+        # base_die가 3 die로 늘어나도 3D-ICE 문법 제약(die당 source 정확히
+        # 1개)이 그대로 지켜져야 한다(export_3dice.build_die_blocks_and_stack
+        # docstring 참고).
+        files = build_stack_description(power_scenario=scenario)
+        stk = files["stack.stk"]
+        for name in BASE_DIE_BLOCK_NAMES:
+            assert f"die die_{name} :\n   source" in stk
+
+    def test_s0_uniform_stack_order_groups_base_die_blocks_at_bottom(self):
+        # s0_uniform은 기존 단일 base_die 배분과 물리적으로 등가여야 하므로
+        # 3 sub-die가 스택 최하단(stack: 블록에서 마지막 3개)에 그룹으로
+        # 위치해야 한다 — 순서 반전 없이 다른 레이어와 동일한 규칙 적용.
+        files = build_stack_description(power_scenario="s0_uniform")
+        stk = files["stack.stk"]
+        lines = [
+            l.strip() for l in stk.splitlines() if l.strip().startswith("die ")
+        ]
+        # 최상단 die 목록(die_ 정의부 아닌 stack 참조부) 중 마지막 3개.
+        stack_refs = [l for l in lines if " die_" in l and "floorplan" in l]
+        last_three_names = {ref.split()[1] for ref in stack_refs[-3:]}
+        assert last_three_names == set(BASE_DIE_BLOCK_NAMES)
+
+    def test_s0_uniform_matches_area_fraction_power_split(self):
+        # s0_uniform은 면적비(BASE_DIE_BLOCK_WIDTH_FRACTIONS) 배분과 물리적으로
+        # 등가 — base_power_w * width_frac이어야 한다(회귀 게이트 근거).
+        power_spec = build_power_spec(power_scenario="s0_uniform")
+        files = build_stack_description(power_scenario="s0_uniform")
+        base_power_w = 16.0 * 0.55
+        for name in BASE_DIE_BLOCK_NAMES:
+            content = files[f"{name}.flp"]
+            line = next(l for l in content.splitlines() if "power values" in l)
+            written_power = float(line.split("power values")[1].rstrip(" ;").strip())
+            expected_power = base_power_w * BASE_DIE_BLOCK_WIDTH_FRACTIONS[name]
+            assert written_power == pytest.approx(power_spec[name])
+            assert written_power == pytest.approx(expected_power)
