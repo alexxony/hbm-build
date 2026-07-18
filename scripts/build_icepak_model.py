@@ -365,7 +365,28 @@ def solve_at_mesh_resolution(ipk, mesh_region_resolution: int) -> bool:
     global_mesh.settings["MeshRegionResolution"] = mesh_region_resolution
     global_mesh.update()
 
-    return ipk.analyze()
+    analyze_ok = ipk.analyze()
+    if not analyze_ok:
+        # P4 T3 3차 A-S1 실측 확인: ipk.analyze() 내부(analysis.py analyze_setup())가
+        # setup=None일 때 self.odesign.AnalyzeAll(blocking)을 호출하는데, 이 native
+        # 호출이 예외를 던지면 pyaedt가 `except Exception: logger.error("Error in
+        # solving all setups (AnalyzeAll).")`로 **원래 예외 메시지를 버리고** 제네릭
+        # 텍스트만 남긴다(analysis.py L1819-1821). "Design setup None solved
+        # correctly in ...s" 로그도 name=None을 그대로 찍는 상시 출력이라 진짜
+        # 실패 원인과 무관 — setup 이름 미등록을 의미하지 않는다.
+        # AEDT 네이티브 메시지 매니저(oDesktop.GetMessages)를 직접 조회해 pyaedt가
+        # 삼킨 실제 네이티브 오류 텍스트를 회수한다.
+        try:
+            native_messages = ipk.odesktop.GetMessages("", "", 0)
+            print(f"[진단] AEDT 네이티브 메시지 매니저 회수 (analyze() 실패 직후): {native_messages}")
+        except Exception as diag_exc:  # noqa: BLE001 - 진단 전용, 원 실패를 가리면 안 됨
+            print(f"[진단] GetMessages() 조회 자체가 실패: {diag_exc!r}")
+        try:
+            setup_names = ipk.setup_names
+            print(f"[진단] 현재 등록된 setup 이름 목록: {setup_names!r}")
+        except Exception as diag_exc:  # noqa: BLE001
+            print(f"[진단] setup_names 조회 자체가 실패: {diag_exc!r}")
+    return analyze_ok
 
 
 def build_and_solve(
