@@ -1,0 +1,3 @@
+% Average temperatures for the floorplan element tsva of the die base_die
+% Time(s) 	 base_die.tsva(K)
+0.000 	 369.924

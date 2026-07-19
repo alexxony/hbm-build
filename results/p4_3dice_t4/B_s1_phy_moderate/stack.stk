@@ -1,0 +1,143 @@
+material hbm_tsv_die_mat :
+   thermal conductivity     1.493635e-04, 1.493635e-04, 1.504439e-04 ;
+   volumetric heat capacity 1.660585e-12 ;
+
+material hbm_bump_mat :
+   thermal conductivity     6.891441e-07, 6.891441e-07, 8.532481e-06 ;
+   volumetric heat capacity 1.855862e-12 ;
+
+material hbm_top_die_mat :
+   thermal conductivity     1.480000e-04, 1.480000e-04, 1.480000e-04 ;
+   volumetric heat capacity 1.641945e-12 ;
+
+material hbm_emc_mat :
+   thermal conductivity     1.000000e-06, 1.000000e-06, 1.000000e-06 ;
+   volumetric heat capacity 1.710000e-12 ;
+
+top heat sink :
+   heat transfer coefficient 2.500000e-09 ;
+   temperature               313.1500 ;
+
+bottom heat sink :
+   heat transfer coefficient 2.500000e-09 ;
+   temperature               313.1500 ;
+
+dimensions :
+   chip length 11000.0000, width 10000.0000 ;
+   cell length 550.0000, width 500.0000 ;
+   non-uniform false ;
+
+die die_base_die :
+   source 60.0000 hbm_tsv_die_mat ;
+
+die die_bump_layer_1 :
+   source 20.0000 hbm_bump_mat ;
+
+die die_dram_die_1 :
+   source 45.0000 hbm_tsv_die_mat ;
+
+die die_bump_layer_2 :
+   source 20.0000 hbm_bump_mat ;
+
+die die_dram_die_2 :
+   source 45.0000 hbm_tsv_die_mat ;
+
+die die_bump_layer_3 :
+   source 20.0000 hbm_bump_mat ;
+
+die die_dram_die_3 :
+   source 45.0000 hbm_tsv_die_mat ;
+
+die die_bump_layer_4 :
+   source 20.0000 hbm_bump_mat ;
+
+die die_dram_die_4 :
+   source 45.0000 hbm_tsv_die_mat ;
+
+die die_bump_layer_5 :
+   source 20.0000 hbm_bump_mat ;
+
+die die_dram_die_5 :
+   source 45.0000 hbm_tsv_die_mat ;
+
+die die_bump_layer_6 :
+   source 20.0000 hbm_bump_mat ;
+
+die die_dram_die_6 :
+   source 45.0000 hbm_tsv_die_mat ;
+
+die die_bump_layer_7 :
+   source 20.0000 hbm_bump_mat ;
+
+die die_dram_die_7 :
+   source 45.0000 hbm_tsv_die_mat ;
+
+die die_top_die :
+   source 45.0000 hbm_top_die_mat ;
+
+die die_EMC :
+   source 100.0000 hbm_emc_mat ;
+
+stack:
+   die EMC die_EMC floorplan "./EMC_nopower.flp" ;
+   die top_die die_top_die floorplan "./top_die.flp" ;
+   die dram_die_7 die_dram_die_7 floorplan "./dram_die_7.flp" ;
+   die bump_layer_7 die_bump_layer_7 floorplan "./bump_layer_7_nopower.flp" ;
+   die dram_die_6 die_dram_die_6 floorplan "./dram_die_6.flp" ;
+   die bump_layer_6 die_bump_layer_6 floorplan "./bump_layer_6_nopower.flp" ;
+   die dram_die_5 die_dram_die_5 floorplan "./dram_die_5.flp" ;
+   die bump_layer_5 die_bump_layer_5 floorplan "./bump_layer_5_nopower.flp" ;
+   die dram_die_4 die_dram_die_4 floorplan "./dram_die_4.flp" ;
+   die bump_layer_4 die_bump_layer_4 floorplan "./bump_layer_4_nopower.flp" ;
+   die dram_die_3 die_dram_die_3 floorplan "./dram_die_3.flp" ;
+   die bump_layer_3 die_bump_layer_3 floorplan "./bump_layer_3_nopower.flp" ;
+   die dram_die_2 die_dram_die_2 floorplan "./dram_die_2.flp" ;
+   die bump_layer_2 die_bump_layer_2 floorplan "./bump_layer_2_nopower.flp" ;
+   die dram_die_1 die_dram_die_1 floorplan "./dram_die_1.flp" ;
+   die bump_layer_1 die_bump_layer_1 floorplan "./bump_layer_1_nopower.flp" ;
+   die base_die die_base_die floorplan "./base_die.flp" ;
+
+solver:
+   steady ;
+   initial temperature 313.1500 ;
+   numofcores 1 ;
+
+output:
+   Tflp ( bump_layer_1, "bump_layer_1_avg.txt", average, final ) ;
+   Tflp ( bump_layer_1, "bump_layer_1_max.txt", maximum, final ) ;
+   Tflp ( dram_die_1, "dram_die_1_avg.txt", average, final ) ;
+   Tflp ( dram_die_1, "dram_die_1_max.txt", maximum, final ) ;
+   Tflp ( bump_layer_2, "bump_layer_2_avg.txt", average, final ) ;
+   Tflp ( bump_layer_2, "bump_layer_2_max.txt", maximum, final ) ;
+   Tflp ( dram_die_2, "dram_die_2_avg.txt", average, final ) ;
+   Tflp ( dram_die_2, "dram_die_2_max.txt", maximum, final ) ;
+   Tflp ( bump_layer_3, "bump_layer_3_avg.txt", average, final ) ;
+   Tflp ( bump_layer_3, "bump_layer_3_max.txt", maximum, final ) ;
+   Tflp ( dram_die_3, "dram_die_3_avg.txt", average, final ) ;
+   Tflp ( dram_die_3, "dram_die_3_max.txt", maximum, final ) ;
+   Tflp ( bump_layer_4, "bump_layer_4_avg.txt", average, final ) ;
+   Tflp ( bump_layer_4, "bump_layer_4_max.txt", maximum, final ) ;
+   Tflp ( dram_die_4, "dram_die_4_avg.txt", average, final ) ;
+   Tflp ( dram_die_4, "dram_die_4_max.txt", maximum, final ) ;
+   Tflp ( bump_layer_5, "bump_layer_5_avg.txt", average, final ) ;
+   Tflp ( bump_layer_5, "bump_layer_5_max.txt", maximum, final ) ;
+   Tflp ( dram_die_5, "dram_die_5_avg.txt", average, final ) ;
+   Tflp ( dram_die_5, "dram_die_5_max.txt", maximum, final ) ;
+   Tflp ( bump_layer_6, "bump_layer_6_avg.txt", average, final ) ;
+   Tflp ( bump_layer_6, "bump_layer_6_max.txt", maximum, final ) ;
+   Tflp ( dram_die_6, "dram_die_6_avg.txt", average, final ) ;
+   Tflp ( dram_die_6, "dram_die_6_max.txt", maximum, final ) ;
+   Tflp ( bump_layer_7, "bump_layer_7_avg.txt", average, final ) ;
+   Tflp ( bump_layer_7, "bump_layer_7_max.txt", maximum, final ) ;
+   Tflp ( dram_die_7, "dram_die_7_avg.txt", average, final ) ;
+   Tflp ( dram_die_7, "dram_die_7_max.txt", maximum, final ) ;
+   Tflp ( top_die, "top_die_avg.txt", average, final ) ;
+   Tflp ( top_die, "top_die_max.txt", maximum, final ) ;
+   Tflp ( EMC, "EMC_avg.txt", average, final ) ;
+   Tflp ( EMC, "EMC_max.txt", maximum, final ) ;
+   Tflpel ( base_die.phy, "base_die_phy_avg.txt", average, final ) ;
+   Tflpel ( base_die.phy, "base_die_phy_max.txt", maximum, final ) ;
+   Tflpel ( base_die.tsva, "base_die_tsva_avg.txt", average, final ) ;
+   Tflpel ( base_die.tsva, "base_die_tsva_max.txt", maximum, final ) ;
+   Tflpel ( base_die.da, "base_die_da_avg.txt", average, final ) ;
+   Tflpel ( base_die.da, "base_die_da_max.txt", maximum, final ) ;

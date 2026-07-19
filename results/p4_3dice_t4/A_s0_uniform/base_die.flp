@@ -1,0 +1,14 @@
+phy :
+   position 0.0000, 0 ;
+   dimension 2200.0000, 10000.0000 ;
+   power values 3.300000 ;
+
+tsva :
+   position 2200.0000, 0 ;
+   dimension 7150.0000, 10000.0000 ;
+   power values 10.725000 ;
+
+da :
+   position 9350.0000, 0 ;
+   dimension 1650.0000, 10000.0000 ;
+   power values 2.475000 ;

@@ -1,0 +1,3 @@
+% Maximum temperatures for the floorplan element da of the die base_die
+% Time(s) 	 base_die.da(K)
+0.000 	 374.154

@@ -1,0 +1,3 @@
+% Average temperatures for the floorplan of the die dram_die_6
+% Time(s) 	 Whole(K) 	 
+0.000 	 373.584 	 
