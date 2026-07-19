@@ -11,3 +11,44 @@ results/3dice_work/
 results/3dice_transient_work/
 results/3dice_transient_work_steady_ref/
 results/3dice_p3_work/
+
+# Windows 클론 AEDT 런 부산물 (실행마다 재생성, 결과 CSV 아님)
+# 프로세스 상태 플래그 — 배치 러너가 매 스텝 생성
+*_done_flag.txt
+*_exitcode.txt
+
+# results/p4_icepak_scenarios/ 직속 진단 텍스트(라이선스/프로세스/appdata 점검 로그)
+# 주의: results/p4_icepak_scenarios/debug_20260719/ 하위 동명 파일은 이미 추적 중 — 경로 고정으로 회피
+results/p4_icepak_scenarios/ansyscl_cpu1.txt
+results/p4_icepak_scenarios/ansyscl_status2.txt
+results/p4_icepak_scenarios/ansyscl_status3.txt
+results/p4_icepak_scenarios/ansysli_env.txt
+results/p4_icepak_scenarios/ansysli_env_machine.txt
+results/p4_icepak_scenarios/ansysli_proc_recheck.txt
+results/p4_icepak_scenarios/ansyslmd_env_machine.txt
+results/p4_icepak_scenarios/appdata_ansys_epoch.txt
+results/p4_icepak_scenarios/appdata_ansys_listing.txt
+results/p4_icepak_scenarios/appdata_full_listing.txt
+results/p4_icepak_scenarios/cpu1.txt
+results/p4_icepak_scenarios/cpu2.txt
+results/p4_icepak_scenarios/dir_listing.txt
+results/p4_icepak_scenarios/health1.txt
+results/p4_icepak_scenarios/health_now.txt
+results/p4_icepak_scenarios/kill_ansyscl_ctrl.txt
+results/p4_icepak_scenarios/kill_confirm.txt
+results/p4_icepak_scenarios/license_proc_scan.txt
+results/p4_icepak_scenarios/licensing_logs_locate.txt
+results/p4_icepak_scenarios/lmstat_output.txt
+results/p4_icepak_scenarios/lmutil_locate.txt
+results/p4_icepak_scenarios/proc_check.txt
+results/p4_icepak_scenarios/proc_check2.txt
+results/p4_icepak_scenarios/proc_check_fix5.txt
+results/p4_icepak_scenarios/python_check.txt
+results/p4_icepak_scenarios/wide_scan.txt
+results/p4_icepak_scenarios/wide_scan_ctrl_final.txt
+results/p4_icepak_scenarios/wide_scan_ctrl_pre.txt
+results/p4_icepak_scenarios/wide_scan_ctrl_pre2.txt
+results/p4_icepak_scenarios/wide_scan_final.txt
+
+# 최상위 배치 로그 (WSL repo에는 없던 파일, Windows 클론 실행 부산물)
+/batch.log
