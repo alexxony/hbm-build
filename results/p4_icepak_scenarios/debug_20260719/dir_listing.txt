@@ -1,0 +1,12 @@
+
+Name                  Length LastWriteTime         
+----                  ------ -------------         
+dir_listing.txt            0 2026-07-19 ?? 9:06:08 
+p4_icepak_a_s0.csv       609 2026-07-18 ?? 9:03:07 
+proc_check.txt            14 2026-07-19 ?? 9:05:37 
+run_a_s1.log            8078 2026-07-18 ?? 9:06:08 
+run_a_s1_fix1.log       5370 2026-07-19 ?? 12:00:30
+run_a_s1_retry1.log     4232 2026-07-18 ?? 10:00:23
+t3_attempt2_batch.log  21692 2026-07-18 ?? 9:03:07 
+
+

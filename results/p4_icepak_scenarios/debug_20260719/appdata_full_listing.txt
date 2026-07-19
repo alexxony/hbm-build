@@ -1,0 +1,9 @@
+
+FullName                                                                 WriteEpoch Length
+--------                                                                 ---------- ------
+C:\Users\LG-PC\AppData\Roaming\ANSYS\v252\ProdConfig\uninst_data.dat     1783411310   6169
+C:\Users\LG-PC\AppData\Roaming\ANSYS\lastexpdisp.dt                      1784423149     11
+C:\Users\LG-PC\AppData\Roaming\ANSYS\14952999994479127097.dat            1784436272   1046
+C:\Users\LG-PC\AppData\Roaming\ANSYS\ansyscl.DESKTOP-80KBJNV.28444.38623 1784436415     10
+
+

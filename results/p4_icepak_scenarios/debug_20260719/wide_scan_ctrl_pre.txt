@@ -1,0 +1,7 @@
+COUNT=1
+
+  Id ProcessName Path                                                                 
+  -- ----------- ----                                                                 
+3456 ansyscl     C:\PROGRA~1\ANSYSI~1\ANSYSS~1\v252\licensingclient\winx64\ansyscl.exe
+
+

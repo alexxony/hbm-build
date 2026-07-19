@@ -1,0 +1,7 @@
+COUNT=1
+
+   Id ProcessName StartEpoch Path                                                                 
+   -- ----------- ---------- ----                                                                 
+23688 ansyscl     1784433984 C:\PROGRA~1\ANSYSI~1\ANSYSS~1\v252\licensingclient\winx64\ansyscl.exe
+
+

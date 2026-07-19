@@ -1,0 +1,7 @@
+
+FullName                                                                           
+--------                                                                           
+C:\Program Files\ANSYS Inc\ANSYS Student\v252\AnsysEM\fluent\ntbin\win64\lmutil.exe
+C:\Program Files\ANSYS Inc\ANSYS Student\v252\licensingclient\winx64\lmutil.exe    
+
+
