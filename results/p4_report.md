@@ -185,6 +185,48 @@ FAIL(0.8905)은 물리적 모델 불일치가 아니라 Icepak(max)과 3D-ICE(av
 점이다. 상세 데이터·테스트: `results/p4_t4_crossval.csv`(신규 행
 `G4_A계열_진폭비율_avg대avg_T1`), `tests/test_p5_t1_amplitude_recheck.py`.
 
+### 4.5 T3 후속 결과 — B계열(bottomsink) 조건부 축소 경로(P5)
+
+P5([[09-p5-analysis-design]] §3 T3)에서 T1이 H_T1을 확증했으므로,
+설계 문서의 조건부 스코프 규칙에 따라 T3은 **1차 avg-avg 재비교만
+수행**하는 축소 경로로 진행했다.
+
+**사전 확인(중요)**: §4.2의 B계열 평균오차(47.46%/18.75%/18.64%)는
+A계열 진폭비율과 달리, 애초에 `hbm_thermal/comparison.py`의
+`compare_die_temperatures()`가 Icepak `avg_temp_c`와 3D-ICE `avg_c`를
+비교해 산출한 것이다(실측 확인, `comparison.py:50-65`) — **이미
+avg-avg 비교축**이며, A계열처럼 max-vs-avg 통계량 불일치가 없다.
+따라서 평균오차 자체는 "avg-avg로 재구성"할 여지가 없다.
+
+재구성 여지가 있는 것은 T1과 동일 방법론인 **진폭비율(S2−S0)** 이며,
+B계열에 대해서는 P4에서 한 번도 계산된 적이 없었다(A계열만
+`amp_ratio_a`로 계산됨, §4.2의 "억제비 0.199 vs 0.435"는 별도
+side-metric으로 스크립트화되지 않았음). 이를 T3에서 최초로 계산했다.
+
+B-S0(균일 시나리오)는 `base_die_phy` 분할이 없고 `base_die` 단일
+행만 존재하므로(실측 확인, `results/p4_icepak_scenarios/p4_icepak_b_s0.csv`),
+S0 앵커는 `base_die`의 avg_temp_c를 사용했다(기존
+`p4_t4_crossval_hypotheses.py`의 `base_die_max()` 폴백 패턴과 동일
+논리). 이 때문에 S0/S2 앵커 die명이 다르다는 비대칭이 존재함을
+명시한다(`scripts/p5_t3_bottomsink_avgavg.py`).
+
+| 항목 | Icepak avg S0 | Icepak avg S2 | 진폭(Icepak) | 3D-ICE avg 진폭 | 비율 |
+|---|---|---|---|---|---|
+| B계열 avg-avg 재구성 | 67.871°C(`base_die`) | 100.169°C(`base_die_phy`) | 32.298K | 24.597K | **0.7616** |
+
+**판정: FAIL**(합격선 [0.9, 1.1] 밖, 진폭비율도 0.9 문턱에 크게 미달).
+
+**3분류 판정: "근본 재설계 필요"** — 평균오차가 이미 avg-avg
+비교축이었음에도 대폭 FAIL(18.6~47.5%)이고, 진폭비율도 avg-avg
+재구성 후 0.7616으로 여전히 FAIL이다. 즉 B계열 괴리는 A계열과 달리
+비교축(통계량) 불일치로는 설명되지 않는다 — 설계 §3 T3 조건부
+규칙에 따라 **근본 원인 조사(3D-ICE bottomsink 파라미터 딥다이브,
+`.stk` 육안 검증)는 본 P5 스코프에서 제외하고 P5+ 후보로 이월**한다.
+신규 3D-ICE 실행은 수행하지 않았다(기존 산출물만 재사용).
+
+상세 데이터·테스트: `results/p4_t4_crossval.csv`(신규 행
+`G4_B계열_진폭비율_avg대avg_T3`), `tests/test_p5_t3_bottomsink_avgavg.py`.
+
 ## 5. H3 지표명 정리(T4 이관 미결 해소)
 
 커밋된 `results/p4_t4_crossval.csv`에는 다음 행이 존재한다:
