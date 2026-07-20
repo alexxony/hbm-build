@@ -224,3 +224,144 @@ def write_rc_params_csv(path: str, rows: list[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def append_rc_params_csv(path: str, rows: list[dict]) -> None:
+    """기존 rc_params.csv에 행을 append한다(기존 c_hbm/r_hbm_sink 행 무변경).
+
+    파일이 이미 존재하고 헤더가 있어야 한다 — 헤더 재작성 없이 데이터
+    행만 추가한다. P4 T5 hotspot 지표(별도 파라미터) 추가용.
+    """
+    fieldnames = ["parameter", "value", "value_min", "value_max", "unit", "method", "basis_case"]
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writerows(rows)
+
+
+def load_p3_scenario_csv(path: str) -> dict[str, dict[str, float]]:
+    """P3 Icepak 시나리오 CSV(die,avg_temp_c,max_temp_c)를 읽어 die명->값 dict로 반환."""
+    with open(path, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    return {
+        row["die"]: {
+            "avg_temp_c": float(row["avg_temp_c"]),
+            "max_temp_c": float(row["max_temp_c"]),
+        }
+        for row in rows
+    }
+
+
+@dataclass(frozen=True)
+class RHbmSinkMaxCase:
+    """r_hbm_sink_max(hotspot 기반) 산출에 쓰인 개별 케이스 실측."""
+
+    case_name: str
+    delta_t_k: float
+    power_w: float
+    r_k_w: float
+
+
+def compute_r_hbm_sink_max_anchor(
+    param_study_rows: list[dict],
+    ambient_c: float = 40.0,
+    case_names: tuple[str, ...] = ("baseline_8hi", "cooling_top_bottom"),
+) -> tuple[list[RHbmSinkMaxCase], float, float]:
+    """param_study.csv의 base_die_max_c 기반으로 r_hbm_sink_max 대표 범위를 낸다.
+
+    기존 r_hbm_sink(avg 기반)와 동일한 두 냉각 케이스(top-only vs
+    top+bottom)를 재사용하되 온도 컬럼만 base_die_avg_c -> base_die_max_c로
+    바꾼다. baseline_8hi 앵커값은 P4 T4/T5에서 이미 산출된 R=5.1386 K/W
+    (JOURNAL 2026-07-19T22:29:53+09:00, p4_report.md §5 hotspot R 행)와
+    정확히 일치해야 한다 — 앵커 교차검증 대상.
+
+    R = (base_die_max_c - ambient_c) / total_power_w.
+    """
+    cases_generic, r_min, r_max = compute_r_hbm_sink_range(
+        param_study_rows,
+        ambient_c=ambient_c,
+        case_names=case_names,
+        temperature_column="base_die_max_c",
+    )
+    cases = [
+        RHbmSinkMaxCase(
+            case_name=c.case_name, delta_t_k=c.delta_t_k, power_w=c.power_w, r_k_w=c.r_k_w
+        )
+        for c in cases_generic
+    ]
+    return cases, r_min, r_max
+
+
+def compute_r_hbm_sink_max_p3_scenarios(
+    p3_scenarios: dict[str, dict[str, dict[str, float]]],
+    total_power_w: float = 16.0,
+    ambient_c: float = 40.0,
+    die_name: str = "base_die",
+) -> list[RHbmSinkMaxCase]:
+    """P3 전력맵 시나리오별(s0/s1/s2) base_die max 기반 R을 계산한다.
+
+    P3 세 시나리오는 top-only 냉각·총전력 16.0W 고정, base_die 내부
+    PHY/TSVA/DA 배분만 다르다(build_icepak_model.py --power-scenario,
+    base_die_fraction=0.55 고정 — JOURNAL 2026-07-19T22:05:00+09:00
+    build_power_spec() 확인: DRAM/bump/EMC 전력은 시나리오 불변).
+    p3_scenarios: {시나리오명: load_p3_scenario_csv() 결과} dict.
+    """
+    cases: list[RHbmSinkMaxCase] = []
+    for scenario_name in sorted(p3_scenarios):
+        dies = p3_scenarios[scenario_name]
+        max_temp_c = dies[die_name]["max_temp_c"]
+        delta_t_k = max_temp_c - ambient_c
+        r_k_w = delta_t_k / total_power_w
+        cases.append(
+            RHbmSinkMaxCase(
+                case_name=scenario_name,
+                delta_t_k=delta_t_k,
+                power_w=total_power_w,
+                r_k_w=r_k_w,
+            )
+        )
+    return cases
+
+
+def build_r_hbm_sink_max_row(
+    anchor_cases: list[RHbmSinkMaxCase],
+    anchor_r_min: float,
+    anchor_r_max: float,
+    p3_cases: list[RHbmSinkMaxCase],
+) -> dict:
+    """rc_params.csv에 append할 r_hbm_sink_max(hotspot 기반) 행을 구성한다.
+
+    스키마는 기존 c_hbm/r_hbm_sink 행과 동일(parameter, value, value_min,
+    value_max, unit, method, basis_case). 값은 냉각 BC 두 케이스(anchor)
+    범위를 대표로 쓰고, P3 전력맵 3케이스(s0/s1/s2, top-only 냉각 고정)는
+    basis_case 서술에 개별 명시해 전력맵 의존성도 함께 드러낸다.
+    """
+    anchor_detail = "; ".join(
+        f"{c.case_name}: dT={c.delta_t_k:.3f}K/P={c.power_w:.3f}W->R={c.r_k_w:.6f}K/W"
+        for c in anchor_cases
+    )
+    p3_detail = "; ".join(
+        f"{c.case_name}: dT={c.delta_t_k:.3f}K/P={c.power_w:.3f}W->R={c.r_k_w:.6f}K/W"
+        for c in p3_cases
+    )
+    anchor_names = ", ".join(c.case_name for c in anchor_cases)
+    p3_names = ", ".join(c.case_name for c in p3_cases)
+
+    return {
+        "parameter": "r_hbm_sink_max",
+        "value": f"{anchor_r_max:.6f}",
+        "value_min": f"{anchor_r_min:.6f}",
+        "value_max": f"{anchor_r_max:.6f}",
+        "unit": "K/W",
+        "method": (
+            "실측(hotspot 기반): R = (base_die_max_c - ambient_c) / total_power_w, "
+            "r_hbm_sink(avg 기반)와 동일 두 냉각 케이스로 대표 범위 산출 — "
+            "hotspot R은 전력맵(base_die 내부 PHY/TSVA/DA 배분)에도 의존하므로 "
+            "P3 3-시나리오(top-only 고정, 16W) 개별값을 basis_case에 별도 명시 "
+            "(단일 대표값이 아닌 범위 필수 — P4 T5 R=5.1386 K/W 앵커와 정합, "
+            "JOURNAL 2026-07-19T22:29:53+09:00)"
+        ),
+        "basis_case": (
+            f"[냉각BC 범위 앵커] {anchor_names} ({anchor_detail}); "
+            f"[P3 전력맵 시나리오, top-only 냉각·16W 고정] {p3_names} ({p3_detail})"
+        ),
+    }
