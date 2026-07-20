@@ -145,6 +145,46 @@ A/B 양계열 모두 3D-ICE 교차검증에 실패했다. 방향 일치성(s0<s1
 은 Icepak(FEM, 정본) 실측에 근거하며, 3D-ICE 결과는 방향 검증(정성적
 보조 지표)으로만 사용했다.
 
+**위 §4.1~4.3의 FAIL 기재는 정정하지 않고 그대로 유지한다** — §4.4는
+후속 분석(P5 T1)으로 추가된 별도 결과이며, 위 판정을 대체하지 않는다.
+
+### 4.4 T1 후속 결과 — avg-vs-avg 재구성(P5)
+
+P5([[09-p5-analysis-design]] §2 H_T1)에서 §4.1의 A계열 진폭비율 FAIL
+(0.8905)의 원인이 물리적 모델 불일치가 아니라 **비교축(통계량) 불일치**
+때문인지를 재검증했다. §4.1의 진폭비율은 Icepak `base_die_phy`의 **max**
+(hotspot, S0=193.679°C, S2=230.196°C)와 3D-ICE `base_die_phy`의 **avg**
+(S0=180.147°C, S2=212.240°C)를 대조한 것이었다. 그런데 3D-ICE는 블록
+단위 lumped RC 컴팩트 모델이라 블록 내부 공간 분포가 없어 항상
+avg=max로 수렴한다(3D-ICE 출력 CSV에서 avg_c와 max_c 컬럼이 모든 행에서
+동일함을 실측 확인) — 즉 "avg와 다른 max"라는 개념 자체가 3D-ICE 쪽에는
+없다.
+
+재구성 방법: 3D-ICE 값은 그대로 두고 Icepak 쪽 지표만 avg로
+바꿔(`results/p4_icepak_scenarios/p4_icepak_a_s0.csv`,
+`p4_icepak_a_s2.csv`의 `base_die_phy` 행 avg_temp_c 사용) 진폭비율을
+재계산했다(`scripts/p5_t1_amplitude_recheck.py`).
+
+| 항목 | Icepak avg S0 | Icepak avg S2 | 진폭(Icepak) | 3D-ICE 진폭(avg) | 비율 |
+|---|---|---|---|---|---|
+| avg-avg 재구성 | 183.659°C | 215.318°C | 31.659K | 32.093K | **1.0137** |
+
+**판정: PASS** (합격선 [0.9, 1.1] 내). **H_T1 확증** — G4 A계열 진폭비율
+FAIL(0.8905)은 물리적 모델 불일치가 아니라 Icepak(max)과 3D-ICE(avg)
+간 통계량 불일치(비교축 문제)가 지배적 원인이었음이 확인됐다. avg-avg
+로 재구성하면 비율이 1.0137로, P3(16W)의 avg-avg 선례(1.014, `p3_report.md`
+§5)와 사실상 동일한 수준까지 정합한다.
+
+**주의**: 이 결과는 §4.1의 "hotspot(max) 기준 G4 A계열 종합 FAIL"
+판정을 취소하지 않는다. hotspot 재현이라는 원래의 검증 목적(칩
+최고온도 예측)에는 여전히 3D-ICE 컴팩트 모델의 구조적 한계(블록
+내부 분포 없음)가 남아 있다 — G4가 "hotspot 기준으로" FAIL이라는
+사실 자체는 유효하다. T1이 밝힌 것은 그 FAIL의 **원인**이 "물리
+모델이 틀렸다"가 아니라 "애초에 다른 통계량(avg vs max)을 비교하고
+있었다"는 것이며, die 평균 온도 수준에서는 두 솔버가 잘 정합한다는
+점이다. 상세 데이터·테스트: `results/p4_t4_crossval.csv`(신규 행
+`G4_A계열_진폭비율_avg대avg_T1`), `tests/test_p5_t1_amplitude_recheck.py`.
+
 ## 5. H3 지표명 정리(T4 이관 미결 해소)
 
 커밋된 `results/p4_t4_crossval.csv`에는 다음 행이 존재한다:
