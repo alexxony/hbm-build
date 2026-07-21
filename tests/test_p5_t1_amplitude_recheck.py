@@ -118,11 +118,53 @@ class TestAppendCrossvalRow:
             writer.writerow(["G4_A계열_진폭비율", "0.8905", "합격선[0.9,1.1] -> FAIL"])
         monkeypatch.setattr(p5_t1, "CROSSVAL_CSV", csv_path)
 
-        p5_t1.append_crossval_row(31.659, 32.093, 1.0137, True)
+        appended = p5_t1.append_crossval_row(31.659, 32.093, 1.0137, True)
 
+        assert appended is True
         with open(csv_path, newline="", encoding="utf-8") as f:
             rows = list(csv.reader(f))
         assert len(rows) == 3
         assert rows[1] == ["G4_A계열_진폭비율", "0.8905", "합격선[0.9,1.1] -> FAIL"]
         assert rows[2][0] == "G4_A계열_진폭비율_avg대avg_T1"
         assert rows[2][1] == "1.0137"
+
+    def test_idempotent_skip_when_row_already_exists(self, tmp_path, monkeypatch):
+        """음성 케이스: 이미 ROW_LABEL 행이 있으면 재실행해도 append하지 않는다."""
+        csv_path = tmp_path / "p4_t4_crossval.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["항목", "판정/값", "근거수치"])
+            writer.writerow([p5_t1.ROW_LABEL, "1.0137", "기존 실행 결과"])
+        monkeypatch.setattr(p5_t1, "CROSSVAL_CSV", csv_path)
+
+        appended = p5_t1.append_crossval_row(31.659, 32.093, 1.0137, True)
+
+        assert appended is False
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        assert len(rows) == 2  # 헤더 + 기존 행만, 중복 append 없음
+
+    def test_dry_run_does_not_write(self, tmp_path, monkeypatch):
+        """음성 케이스: --dry-run이면 파일 내용이 전혀 바뀌지 않는다."""
+        csv_path = tmp_path / "p4_t4_crossval.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["항목", "판정/값", "근거수치"])
+        monkeypatch.setattr(p5_t1, "CROSSVAL_CSV", csv_path)
+        before = csv_path.read_text(encoding="utf-8")
+
+        appended = p5_t1.append_crossval_row(31.659, 32.093, 1.0137, True, dry_run=True)
+
+        assert appended is False
+        after = csv_path.read_text(encoding="utf-8")
+        assert before == after
+
+    def test_appends_when_csv_does_not_exist_yet(self, tmp_path, monkeypatch):
+        """음성 케이스: CROSSVAL_CSV 자체가 없을 때도 existing_labels 조회가 죽지 않아야 한다."""
+        csv_path = tmp_path / "does_not_exist_yet.csv"
+        monkeypatch.setattr(p5_t1, "CROSSVAL_CSV", csv_path)
+
+        appended = p5_t1.append_crossval_row(31.659, 32.093, 1.0137, True)
+
+        assert appended is True
+        assert csv_path.exists()

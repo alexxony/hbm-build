@@ -52,3 +52,6 @@ results/p4_icepak_scenarios/wide_scan_final.txt
 
 # 최상위 배치 로그 (WSL repo에는 없던 파일, Windows 클론 실행 부산물)
 /batch.log
+
+# scripts/run_icepak_case.sh 표준 로그 출력 디렉터리 (실행마다 재생성, 결과 CSV 아님)
+/logs/

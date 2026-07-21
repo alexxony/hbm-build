@@ -14,14 +14,14 @@
 # 예:
 #   scripts/run_icepak_case.sh a_s1 --power-scenario s1_phy_moderate --total-power 30.0
 #
-# <실행명>은 로그 파일명(results/p4_icepak_scenarios/<실행명>.log)에만 쓰인다.
+# <실행명>은 로그 파일명(logs/<실행명>.log, repo 루트)에만 쓰인다.
 # --output-csv 등 build_icepak_model.py 자체 인자는 그 뒤에 그대로 패스스루한다.
 
 set -u
 
 WSL_REPO="/home/kimsh/workspace/hbm_build"
 WIN_REPO="/mnt/c/workspace/hbm_build"
-RESULTS_DIR="results/p4_icepak_scenarios"
+LOG_DIR="logs"
 
 die() {
     echo "[run_icepak_case] ERROR: $*" >&2
@@ -90,7 +90,7 @@ echo "[run_icepak_case]   PROC_COUNT=0 확인"
 # ---------------------------------------------------------------------------
 echo "[run_icepak_case] 3/4 케이스 실행: $RUN_NAME"
 
-LOG_REL="$RESULTS_DIR/${RUN_NAME}.log"
+LOG_REL="$LOG_DIR/${RUN_NAME}.log"
 LOG_WIN="$WIN_REPO/$LOG_REL"
 mkdir -p "$(dirname "$LOG_WIN")"
 

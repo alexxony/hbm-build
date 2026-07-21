@@ -14,9 +14,14 @@ base_die_phy **max**(hotspot)와 3D-ICE base_die_phy **avg**를 대조한 것이
 기존 p4_t4_crossval_hypotheses.py는 원본 무수정(완결된 리포트 산출
 스크립트) — 이 스크립트는 별도 진입점으로 avg-avg 재계산만 수행하고,
 3D-ICE 재실행은 하지 않는다(3D-ICE 출력은 이미 avg이므로 불필요).
+
+idempotent 설계(P5+ 정리, T3 패턴 이식): argparse + --dry-run + CROSSVAL_CSV
+중복 행 방지(동일 ROW_LABEL이 이미 있으면 재실행 시 append하지 않고 스킵).
+계산 로직·출력값(비율 1.0137)은 이 이식으로 변경되지 않는다.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import sys
 from pathlib import Path
@@ -34,6 +39,8 @@ THREEDICE_CSV = REPO / "results/p4_3dice_t4/p4_3dice_t4_results.csv"
 CROSSVAL_CSV = REPO / "results/p4_t4_crossval.csv"
 
 DIE = "base_die_phy"
+
+ROW_LABEL = "G4_A계열_진폭비율_avg대avg_T1"
 
 
 def read_icepak_avg(path: Path, die: str = DIE) -> float:
@@ -80,12 +87,27 @@ def judge_h_t1(ratio: float) -> tuple[bool, str]:
     return gate_pass, verdict
 
 
-def append_crossval_row(icepak_amp: float, threedice_amp: float, ratio: float, gate_pass: bool) -> None:
-    """results/p4_t4_crossval.csv에 신규 행 append (기존 행 변경 금지)."""
+def append_crossval_row(icepak_amp: float, threedice_amp: float, ratio: float, gate_pass: bool, dry_run: bool = False) -> bool:
+    """results/p4_t4_crossval.csv에 신규 행 append (기존 행 변경 금지).
+
+    idempotent: 이미 ROW_LABEL 행이 존재하면 append하지 않고 False 반환.
+    """
+    if CROSSVAL_CSV.exists():
+        with open(CROSSVAL_CSV, newline="", encoding="utf-8") as f:
+            existing_labels = {row[0] for row in csv.reader(f) if row}
+        if ROW_LABEL in existing_labels:
+            print(f"[스킵] {CROSSVAL_CSV}에 {ROW_LABEL!r} 행이 이미 존재 — 중복 append 방지(idempotent).")
+            return False
+
+    if dry_run:
+        print(f"[dry-run] {CROSSVAL_CSV}에 append할 행(실제 쓰기 없음):")
+        print(f"  {ROW_LABEL}, {ratio:.4f}, ...")
+        return False
+
     with open(CROSSVAL_CSV, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "G4_A계열_진폭비율_avg대avg_T1",
+            ROW_LABEL,
             f"{ratio:.4f}",
             (
                 f"합격선[0.9,1.1] -> {'PASS' if gate_pass else 'FAIL'} | "
@@ -93,9 +115,14 @@ def append_crossval_row(icepak_amp: float, threedice_amp: float, ratio: float, g
                 "P5 T1 avg-avg 재구성(대안 비교축 결과 추가, 기존 max대avg 행은 불변)"
             ),
         ])
+    return True
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="CSV에 쓰지 않고 계산 결과만 출력")
+    args = parser.parse_args()
+
     icepak_s0_avg = read_icepak_avg(ICEPAK_A_S0_CSV)
     icepak_s2_avg = read_icepak_avg(ICEPAK_A_S2_CSV)
     threedice_s0_avg = read_3dice_avg(THREEDICE_CSV, "A", "s0_uniform")
@@ -112,8 +139,9 @@ def main() -> None:
     print(f"avg-avg 진폭비율 = {ratio:.4f} (합격선[0.9,1.1]) -> {'PASS' if gate_pass else 'FAIL'}")
     print(f"H_T1 판정: {verdict}")
 
-    append_crossval_row(icepak_amp, threedice_amp, ratio, gate_pass)
-    print(f"\n[결과] {CROSSVAL_CSV}에 신규 행 append 완료")
+    appended = append_crossval_row(icepak_amp, threedice_amp, ratio, gate_pass, args.dry_run)
+    if appended:
+        print(f"\n[결과] {CROSSVAL_CSV}에 신규 행 append 완료")
 
 
 if __name__ == "__main__":
