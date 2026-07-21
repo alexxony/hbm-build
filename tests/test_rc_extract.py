@@ -9,8 +9,11 @@ from hbm_thermal.homogenize import layer_stack_hbm2e
 from hbm_thermal.rc_extract import (
     LayerCContribution,
     RHbmSinkCase,
+    build_r_hbm_sink_max_p4_row,
     build_rc_params_rows,
     compute_c_hbm,
+    compute_r_hbm_sink_max_p3_scenarios,
+    compute_r_hbm_sink_max_p4_scenarios,
     compute_r_hbm_sink_range,
 )
 
@@ -162,3 +165,113 @@ class TestBuildRcParamsRows:
         expected_fields = {"parameter", "value", "value_min", "value_max", "unit", "method", "basis_case"}
         for row in rows:
             assert set(row.keys()) == expected_fields
+
+
+class TestComputeRHbmSinkMaxP4Scenarios:
+    """P5 T2b: P4(30W, A/B계열 x S0~S2) hotspot R 확장 — 기존
+    compute_r_hbm_sink_max_p3_scenarios()와 동형 함수 회귀 테스트."""
+
+    def test_hand_calc_base_die_phy_present(self):
+        # base_die_phy 행이 있는 일반 케이스(S1/S2 상당)
+        p4_scenarios = {
+            "a_s1": {"base_die_phy": {"avg_temp_c": 202.4, "max_temp_c": 215.32683715820315}},
+            "a_s2": {"base_die_phy": {"avg_temp_c": 215.3, "max_temp_c": 230.19606933593752}},
+        }
+        cases = compute_r_hbm_sink_max_p4_scenarios(p4_scenarios, total_power_w=30.0, ambient_c=40.0)
+        assert len(cases) == 2
+        # 정렬 순서(sorted): a_s1 -> a_s2
+        assert cases[0].case_name == "a_s1[base_die_phy]"
+        expected_r_s1 = (215.32683715820315 - 40.0) / 30.0
+        assert cases[0].r_k_w == pytest.approx(expected_r_s1, rel=1e-9)
+        assert cases[1].case_name == "a_s2[base_die_phy]"
+        expected_r_s2 = (230.19606933593752 - 40.0) / 30.0
+        assert cases[1].r_k_w == pytest.approx(expected_r_s2, rel=1e-9)
+
+    def test_fallback_to_base_die_when_phy_missing(self):
+        # S0(균일배분)처럼 base_die_phy 행이 없고 base_die만 있는 경우 폴백
+        p4_scenarios = {
+            "a_s0": {"base_die": {"avg_temp_c": 180.117, "max_temp_c": 194.15865478515627}},
+        }
+        cases = compute_r_hbm_sink_max_p4_scenarios(p4_scenarios, total_power_w=30.0, ambient_c=40.0)
+        assert len(cases) == 1
+        # 폴백된 die명이 케이스명에 명시돼야 함(대괄호 표기)
+        assert cases[0].case_name == "a_s0[base_die]"
+        expected_r = (194.15865478515627 - 40.0) / 30.0
+        assert cases[0].r_k_w == pytest.approx(expected_r, rel=1e-9)
+
+    def test_actual_p4_a_series_csv_values_anchor_a_s0_ctrl2(self):
+        # results/p4_icepak_scenarios/p4_icepak_a_s0_ctrl2.csv 실측값(정본)
+        # 회귀 방지 고정값 — S0은 base_die 폴백(합성 base_die 행만 존재).
+        p4_scenarios = {
+            "a_s0": {"base_die": {"avg_temp_c": 180.11690692335023, "max_temp_c": 194.15865478515627}},
+            "a_s1": {"base_die_phy": {"avg_temp_c": 202.40879771596306, "max_temp_c": 215.32683715820315}},
+            "a_s2": {"base_die_phy": {"avg_temp_c": 215.3178073448489, "max_temp_c": 230.19606933593752}},
+        }
+        cases = compute_r_hbm_sink_max_p4_scenarios(p4_scenarios, total_power_w=30.0, ambient_c=40.0)
+        by_name = {c.case_name: c for c in cases}
+        assert by_name["a_s0[base_die]"].r_k_w == pytest.approx(5.138622, abs=1e-5)
+        assert by_name["a_s1[base_die_phy]"].r_k_w == pytest.approx(5.844228, abs=1e-5)
+        assert by_name["a_s2[base_die_phy]"].r_k_w == pytest.approx(6.339869, abs=1e-5)
+
+    def test_actual_p4_b_series_csv_values(self):
+        # results/p4_icepak_scenarios/p4_icepak_b_{s0,s1,s2}.csv 실측값
+        # 고정값 — B-S0도 base_die 폴백(균일 전력이라 base_die_phy 분리 없음).
+        p4_scenarios = {
+            "b_s0": {"base_die": {"avg_temp_c": 67.8709502314613, "max_temp_c": 80.97268066406252}},
+            "b_s1": {"base_die_phy": {"avg_temp_c": 95.03762053436704, "max_temp_c": 105.90670166015627}},
+            "b_s2": {"base_die_phy": {"avg_temp_c": 100.16903221022895, "max_temp_c": 111.9467712402344}},
+        }
+        cases = compute_r_hbm_sink_max_p4_scenarios(p4_scenarios, total_power_w=30.0, ambient_c=40.0)
+        by_name = {c.case_name: c for c in cases}
+        assert by_name["b_s0[base_die]"].r_k_w == pytest.approx(1.365756, abs=1e-5)
+        assert by_name["b_s1[base_die_phy]"].r_k_w == pytest.approx(2.196890, abs=1e-5)
+        assert by_name["b_s2[base_die_phy]"].r_k_w == pytest.approx(2.398226, abs=1e-5)
+
+    def test_missing_both_die_and_fallback_raises_keyerror(self):
+        # base_die_phy도 base_die도 없으면(비정상 입력) KeyError로 실패해야 함
+        # — 조용히 잘못된 값을 반환하면 안 됨(음성 케이스).
+        p4_scenarios = {"broken": {"dram_die_1": {"avg_temp_c": 100.0, "max_temp_c": 110.0}}}
+        with pytest.raises(KeyError):
+            compute_r_hbm_sink_max_p4_scenarios(p4_scenarios, total_power_w=30.0, ambient_c=40.0)
+
+    def test_default_total_power_is_30w(self):
+        # 설계 §3 T2: P4는 30W 고정. total_power_w 인자를 생략해도 30.0이어야 함.
+        p4_scenarios = {
+            "x": {"base_die_phy": {"avg_temp_c": 100.0, "max_temp_c": 130.0}},
+        }
+        cases = compute_r_hbm_sink_max_p4_scenarios(p4_scenarios, ambient_c=40.0)
+        assert cases[0].power_w == pytest.approx(30.0)
+        assert cases[0].r_k_w == pytest.approx((130.0 - 40.0) / 30.0)
+
+    def test_p3_function_unchanged_still_uses_16w_default(self):
+        # 기존 함수 무변경 회귀 확인(설계 §3 T2 작업1: "기존 함수는 무변경").
+        p3_scenarios = {
+            "s0_uniform": {"base_die": {"avg_temp_c": 180.0, "max_temp_c": 195.0}},
+        }
+        cases = compute_r_hbm_sink_max_p3_scenarios(p3_scenarios)
+        assert cases[0].power_w == pytest.approx(16.0)
+
+
+class TestBuildRHbmSinkMaxP4Row:
+    def test_produces_expected_row_schema_and_range(self):
+        from hbm_thermal.rc_extract import RHbmSinkMaxCase
+
+        p4_cases = [
+            RHbmSinkMaxCase(case_name="a_s0[base_die]", delta_t_k=154.159, power_w=30.0, r_k_w=5.138622),
+            RHbmSinkMaxCase(case_name="a_s1[base_die_phy]", delta_t_k=175.327, power_w=30.0, r_k_w=5.844228),
+            RHbmSinkMaxCase(case_name="a_s2[base_die_phy]", delta_t_k=190.196, power_w=30.0, r_k_w=6.339869),
+            RHbmSinkMaxCase(case_name="b_s0[base_die]", delta_t_k=40.973, power_w=30.0, r_k_w=1.365756),
+            RHbmSinkMaxCase(case_name="b_s1[base_die_phy]", delta_t_k=65.907, power_w=30.0, r_k_w=2.196890),
+            RHbmSinkMaxCase(case_name="b_s2[base_die_phy]", delta_t_k=71.947, power_w=30.0, r_k_w=2.398226),
+        ]
+        row = build_r_hbm_sink_max_p4_row(p4_cases)
+        assert row["parameter"] == "r_hbm_sink_max_p4"
+        expected_fields = {"parameter", "value", "value_min", "value_max", "unit", "method", "basis_case"}
+        assert set(row.keys()) == expected_fields
+        assert row["unit"] == "K/W"
+        # 범위는 6케이스 중 최소/최대(min=b_s0, max=a_s2)
+        assert float(row["value_min"]) == pytest.approx(1.365756, abs=1e-5)
+        assert float(row["value_max"]) == pytest.approx(6.339869, abs=1e-5)
+        assert float(row["value"]) == pytest.approx(6.339869, abs=1e-5)
+        for c in p4_cases:
+            assert c.case_name in row["basis_case"]

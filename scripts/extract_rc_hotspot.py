@@ -30,17 +30,39 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
+import csv  # noqa: E402
+
 from hbm_thermal.rc_extract import (  # noqa: E402
     append_rc_params_csv,
+    build_r_hbm_sink_max_p4_row,
     build_r_hbm_sink_max_row,
     compute_r_hbm_sink_max_anchor,
     compute_r_hbm_sink_max_p3_scenarios,
+    compute_r_hbm_sink_max_p4_scenarios,
     load_p3_scenario_csv,
     load_param_study_csv,
 )
 
 _ANCHOR_EXPECTED_R_K_W = 5.1386
 _ANCHOR_TOLERANCE_K_W = 0.0005
+
+_P4_SERIES = ("a", "b")
+_P4_SCENARIOS = ("s0", "s1", "s2")
+_P4_S0_CTRL2_SUFFIX = "_ctrl2"  # 설계 §3 T2 작업1: S0은 _ctrl2 버전이 정본
+
+
+def _rc_params_has_parameter(path: str, parameter: str) -> bool:
+    """rc_params.csv에 parameter 컬럼값이 이미 존재하는지 확인(idempotency guard).
+
+    T3(p5_t3_bottomsink_avgavg.py append_crossval_row)의 기존-행 스킵 패턴과
+    동일 — 재실행 시 중복 append 방지.
+    """
+    p = Path(path)
+    if not p.exists():
+        return False
+    with open(p, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    return any(row.get("parameter") == parameter for row in rows)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -88,6 +110,23 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=16.0,
         help="P3 시나리오 스택 총 전력 (W) — s0/s1/s2 전 시나리오 공통(base_die_fraction 0.55 고정)",
+    )
+    parser.add_argument(
+        "--p4-icepak-dir",
+        type=str,
+        default=None,
+        help=(
+            "P4(30W, A/B계열x S0~S2) Icepak 시나리오 CSV 디렉터리(지정 시 P4 6케이스도 "
+            "처리해 r_hbm_sink_max_p4 행 append, 미지정 시 P3만 처리하는 기존 동작 유지). "
+            "파일명 규약: p4_icepak_{a,b}_{s0,s1,s2}.csv, S0은 p4_icepak_{a,b}_s0_ctrl2.csv "
+            "정본 사용(설계 §3 T2 작업1)."
+        ),
+    )
+    parser.add_argument(
+        "--p4-total-power-w",
+        type=float,
+        default=30.0,
+        help="P4 시나리오 스택 총 전력 (W) — A/B계열 x S0~S2 전 시나리오 공통",
     )
     parser.add_argument(
         "--dry-run",
@@ -142,13 +181,61 @@ def main() -> None:
 
     row = build_r_hbm_sink_max_row(anchor_cases, anchor_r_min, anchor_r_max, p3_cases)
 
+    rows_to_append: list[dict] = []
+    if _rc_params_has_parameter(args.rc_params_csv, row["parameter"]):
+        print(
+            f"[스킵] {args.rc_params_csv}에 {row['parameter']!r} 행이 이미 존재 — "
+            "중복 append 방지(idempotent)."
+        )
+    else:
+        rows_to_append.append(row)
+
+    # P4(30W, A/B계열 x S0~S2) 확장 — 설계 §3 T2 작업1·4. --p4-icepak-dir
+    # 미지정 시 기존 P3 전용 동작 그대로 유지(하위 호환).
+    if args.p4_icepak_dir:
+        p4_dir = Path(args.p4_icepak_dir)
+        p4_scenarios: dict[str, dict[str, dict[str, float]]] = {}
+        for series in _P4_SERIES:
+            for scenario in _P4_SCENARIOS:
+                # _ctrl2 정본은 A계열 S0에만 존재(설계 §3 T2 작업1) — B계열은
+                # 해당 파일이 없으므로(실측 확인) 원본 파일을 그대로 사용한다.
+                suffix = (
+                    _P4_S0_CTRL2_SUFFIX
+                    if scenario == "s0" and series == "a"
+                    else ""
+                )
+                csv_path = p4_dir / f"p4_icepak_{series}_{scenario}{suffix}.csv"
+                p4_scenarios[f"{series}_{scenario}"] = load_p3_scenario_csv(str(csv_path))
+
+        p4_cases = compute_r_hbm_sink_max_p4_scenarios(
+            p4_scenarios, total_power_w=args.p4_total_power_w, ambient_c=args.ambient_c
+        )
+
+        print("=== r_hbm_sink_max_p4 P4 전력맵x냉각계열 시나리오 (30W 고정) ===")
+        for c in p4_cases:
+            print(f"  {c.case_name}: dT={c.delta_t_k:.3f}K, P={c.power_w:.3f}W, R={c.r_k_w:.6f}K/W")
+
+        p4_row = build_r_hbm_sink_max_p4_row(p4_cases)
+        if _rc_params_has_parameter(args.rc_params_csv, p4_row["parameter"]):
+            print(
+                f"[스킵] {args.rc_params_csv}에 {p4_row['parameter']!r} 행이 이미 존재 — "
+                "중복 append 방지(idempotent)."
+            )
+        else:
+            rows_to_append.append(p4_row)
+
     if args.dry_run:
-        print("--dry-run 지정 — rc_params.csv 미변경. 산출 행:")
-        print(row)
+        print("--dry-run 지정 — rc_params.csv 미변경. 산출 행(스킵분 제외):")
+        for r in rows_to_append:
+            print(r)
         return
 
-    append_rc_params_csv(args.rc_params_csv, [row])
-    print(f"append 완료: {args.rc_params_csv}")
+    if not rows_to_append:
+        print("append할 신규 행 없음(전부 이미 존재) — rc_params.csv 미변경.")
+        return
+
+    append_rc_params_csv(args.rc_params_csv, rows_to_append)
+    print(f"append 완료: {args.rc_params_csv} ({len(rows_to_append)}행)")
 
 
 if __name__ == "__main__":

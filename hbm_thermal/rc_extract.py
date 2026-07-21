@@ -322,6 +322,87 @@ def compute_r_hbm_sink_max_p3_scenarios(
     return cases
 
 
+def compute_r_hbm_sink_max_p4_scenarios(
+    p4_scenarios: dict[str, dict[str, dict[str, float]]],
+    total_power_w: float = 30.0,
+    ambient_c: float = 40.0,
+    die_name: str = "base_die_phy",
+    fallback_die_name: str = "base_die",
+) -> list[RHbmSinkMaxCase]:
+    """P4 전력맵 시나리오별(A/B계열 x s0/s1/s2) base_die max 기반 R을 계산한다.
+
+    compute_r_hbm_sink_max_p3_scenarios()와 동형(P5 T2b, 설계 문서
+    docs/09-p5-analysis-design.md §3 T2 작업1) — 기존 P3 전용 함수는
+    무변경. P4는 30W 고정(A/B 두 냉각계열 x S0~S2 전력맵 3종=6케이스),
+    S0(균일배분)는 die_name(base_die_phy) 행이 없는 CSV가 있으므로
+    fallback_die_name(base_die)로 자동 폴백한다(T1/T3 선례와 동일 패턴,
+    설계 §3 T2 작업1 "S0은 base_die_phy 부재 시 base_die max로 폴백").
+
+    p4_scenarios: {시나리오명: load_p3_scenario_csv() 결과} dict. 시나리오명은
+        호출부에서 계열·전력맵을 구분해 붙인다(예: "a_s0_uniform").
+        load_p3_scenario_csv()는 P4 CSV(동일 스키마: die,avg_temp_c,max_temp_c)도
+        그대로 읽을 수 있어 재사용한다.
+    """
+    cases: list[RHbmSinkMaxCase] = []
+    for scenario_name in sorted(p4_scenarios):
+        dies = p4_scenarios[scenario_name]
+        if die_name in dies:
+            max_temp_c = dies[die_name]["max_temp_c"]
+            used_die = die_name
+        else:
+            max_temp_c = dies[fallback_die_name]["max_temp_c"]
+            used_die = fallback_die_name
+        delta_t_k = max_temp_c - ambient_c
+        r_k_w = delta_t_k / total_power_w
+        cases.append(
+            RHbmSinkMaxCase(
+                case_name=f"{scenario_name}[{used_die}]",
+                delta_t_k=delta_t_k,
+                power_w=total_power_w,
+                r_k_w=r_k_w,
+            )
+        )
+    return cases
+
+
+def build_r_hbm_sink_max_p4_row(p4_cases: list[RHbmSinkMaxCase]) -> dict:
+    """rc_params.csv에 append할 P4(30W) hotspot R 확장 행을 구성한다.
+
+    설계 §3 T2 작업4: 기존 r_hbm_sink_max 행(냉각BC 범위 앵커 + P3 3케이스)은
+    무변경 유지 — 대표 단일값(value/value_min/value_max)에 전력맵 축을
+    섞지 않는다(설계 §3 T2 작업4 명시). P4 6케이스는 신규 행
+    r_hbm_sink_max_p4로 분리한다. value/value_min/value_max는 6케이스
+    R의 [min, max] 범위를 그대로 채운다(30W 고정이므로 냉각BC 범위
+    앵커 재사용 없음 — A/B 두 냉각계열 자체가 이미 범위축 역할).
+    """
+    r_values = [c.r_k_w for c in p4_cases]
+    r_min = min(r_values)
+    r_max = max(r_values)
+    detail = "; ".join(
+        f"{c.case_name}: dT={c.delta_t_k:.3f}K/P={c.power_w:.3f}W->R={c.r_k_w:.6f}K/W"
+        for c in p4_cases
+    )
+    names = ", ".join(c.case_name for c in p4_cases)
+
+    return {
+        "parameter": "r_hbm_sink_max_p4",
+        "value": f"{r_max:.6f}",
+        "value_min": f"{r_min:.6f}",
+        "value_max": f"{r_max:.6f}",
+        "unit": "K/W",
+        "method": (
+            "실측(hotspot 기반, P5 T2b): R = (base_die_phy_max - ambient_c) / "
+            "total_power_w(30.0 고정), P4 A/B계열 x S0~S2 전력맵 6케이스 — "
+            "r_hbm_sink_max(P3 16W, top-only)와 동일 산식·다른 전력·냉각계열축. "
+            "S0(균일배분)는 base_die_phy 행이 없어 base_die max로 폴백(대괄호 "
+            "표기로 사용된 die 명시, T1/T3 선례와 동일 패턴). "
+            "H_T2(전력 선형성): 설계 §2 반증조건(±10%) 참조 — 상세 판정은 "
+            "p5_report.md §T2b 기재."
+        ),
+        "basis_case": f"[P4 전력맵x냉각계열, 30W 고정] {names} ({detail})",
+    }
+
+
 def build_r_hbm_sink_max_row(
     anchor_cases: list[RHbmSinkMaxCase],
     anchor_r_min: float,
