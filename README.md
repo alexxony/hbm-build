@@ -89,6 +89,8 @@ python3 scripts/extract_rc_params.py --param-study-csv results/param_study.csv -
 python3 scripts/cross_validate_3dice.py --3dice-bin <path-to-3D-ICE-Emulator> --icepak-csv <path> --output-dir results/
 ```
 
+Methodology details: [docs/METHOD.md](docs/METHOD.md)
+
 ## 4. Evidence — where to look
 
 | Finding | Result | Source |
