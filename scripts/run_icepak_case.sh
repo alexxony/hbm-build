@@ -19,7 +19,7 @@
 
 set -u
 
-WSL_REPO="/home/kimsh/workspace/hbm_build"
+WSL_REPO="${WSL_REPO:-$HOME/workspace/hbm_build}"
 WIN_REPO="/mnt/c/workspace/hbm_build"
 LOG_DIR="logs"
 

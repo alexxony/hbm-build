@@ -40,8 +40,8 @@ PyAEDT INFO: Boundary SourceIcepak source_dram_die_7 has been created.
 PyAEDT INFO: Boundary SourceIcepak source_top_die has been created.
 PyAEDT INFO: Boundary Stationary Wall heatsink_approx has been created.
 PyAEDT INFO: Key MaxIterations matched internal key 'Convergence Criteria - Max Iterations' with confidence of 52.
-PyAEDT INFO: Parsing C:\Users\LG-PC\Documents\Ansoft\hbm2e_p4_a_s1_r2.aedt.
-PyAEDT INFO: File C:\Users\LG-PC\Documents\Ansoft\hbm2e_p4_a_s1_r2.aedt correctly loaded. Elapsed time: 0m 0sec
+PyAEDT INFO: Parsing C:\Users\user\Documents\Ansoft\hbm2e_p4_a_s1_r2.aedt.
+PyAEDT INFO: File C:\Users\user\Documents\Ansoft\hbm2e_p4_a_s1_r2.aedt correctly loaded. Elapsed time: 0m 0sec
 PyAEDT INFO: aedt file load time 0.017937898635864258
 PyAEDT WARNING: No mesh operation found.
 PyAEDT WARNING: No mesh region found.
