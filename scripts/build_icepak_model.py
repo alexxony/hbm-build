@@ -123,6 +123,17 @@ def _parse_args() -> argparse.Namespace:
         default="hbm2e_die_temperatures.csv",
         help="die별 온도 결과 CSV 출력 경로",
     )
+    parser.add_argument(
+        "--export-contour-png",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "지정 시 해석 완료 후 스택 단면(YZ cut-plane, x=0) 온도 컨투어를 "
+            "PNG로 export한다. 기본 None = export 안 함(기존 동작 완전 보존, "
+            "포트폴리오 시각 자산용 옵션 기능)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -494,8 +505,41 @@ def build_icepak_model(args: argparse.Namespace) -> None:
             ),
         )
 
+        if args.export_contour_png:
+            _export_temperature_contour(ipk, args.export_contour_png)
+
     finally:
         ipk.release_desktop()
+
+
+def _export_temperature_contour(ipk, output_path: str) -> None:
+    """스택 단면(YZ cut-plane, x=0) 온도 컨투어를 PNG로 export한다.
+
+    x=0 평면은 base_die_phy(또는 단일 base_die) 쪽 스택 경계 근방을 지나
+    전체 z방향 레이어 적층(스택 단면)을 한 번에 보여준다. 실패해도 CSV
+    결과(핵심 산출물)에는 영향이 없도록 예외를 잡아 경고만 출력한다
+    (포트폴리오 시각 자산은 부가 기능이지 필수 결과가 아니다).
+
+    Args:
+        ipk: 해석 완료된 Icepak 인스턴스.
+        output_path: PNG 저장 경로(상대 경로면 AEDT working directory 기준).
+    """
+    try:
+        plot = ipk.post.create_fieldplot_cutplane(
+            assignment=["Global:YZ"],
+            quantity="Temp",
+            plot_name="temp_contour_yz",
+        )
+        if not plot:
+            print("[경고] 컨투어 field plot 생성 실패 — export를 건너뜁니다.")
+            return
+        exported = plot.export_image(full_path=output_path, orientation="front")
+        if exported:
+            print(f"[결과] 온도 컨투어 PNG export 완료: {exported}")
+        else:
+            print("[경고] 컨투어 PNG export가 실패를 반환했습니다.")
+    except Exception as exc:  # noqa: BLE001 - 부가 기능, 핵심 결과(CSV) 실패로 전파 금지
+        print(f"[경고] 컨투어 export 중 예외 발생(핵심 결과에는 영향 없음): {exc!r}")
 
 
 def _export_die_temperatures(
