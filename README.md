@@ -1,5 +1,9 @@
 # HBM_build
 
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Tests](https://img.shields.io/badge/tests-315%20passing-2f7a3d.svg)
+![Python](https://img.shields.io/badge/python-3-3776AB.svg)
+
 > This README documents the FEM/thermal-characterization project. For the downstream consumer — a
 > GPU kernel-optimization loop that judges compiler transformations by simulated junction
 > temperature — see [compiler-thermal](https://github.com/alexxony/compiler-thermal).
@@ -100,6 +104,14 @@ Methodology details: [docs/METHOD.md](docs/METHOD.md)
 | Power-map granularity | Splitting base_die's uniform 8.8 W into 3 patent-informed blocks (PHY/TSVA/DA) leaves the **average** unchanged (<0.001%, so `r_hbm_sink` is untouched) but the **hotspot** underestimates by up to **+19.5 K** under the uniform approximation — a quantified blind spot the average-temperature RC model cannot see. | `results/p3_report.md` §2 |
 | 30 W high-power regime | Hotspot ΔT(S2−S0) scales **linearly** with power: 1.850× at 30 W vs. an expected 1.875× (=30/16) — H1a confirmed, within the pre-registered band. Bottom cooling suppresses the amplification by 14.1%. All A-series scenarios exceed the 95 °C junction spec by 100–135 K (top-only cooling alone is insufficient at 30 W). | `results/p4_report.md` §3, §6 |
 | G4 cross-validation root-cause split | The Icepak-vs-3D-ICE cross-validation gate failed for both cooling series at 30 W — root-cause analysis separated *why*, and the two series resolved differently (see below). Hotspot-resistance parameter (`r_hbm_sink_max`) formalized and extended to all 6 power-map × cooling-series cases at 30 W, confirming power-linearity (S1/S2 deviation ≈0.000%). | `results/p5_report.md` §1-2 |
+
+![ΔT_hotspot power linearity](charts/linearity_deltat.svg)
+
+Two intermediate power points fill in the 16-30 W bracket above: at 20 W, ΔT_hotspot(S2−S0) = **24.345 K**
+(+0.56% vs. the 16W-anchored 1.2175 K/W linear trend); at 24 W, **29.214 K** (+0.94%) — both within ±1% of
+the trend line the 16 W and 30 W endpoints define, confirming the linearity holds between the brackets, not
+just at them (`results/psweep_icepak_a_{20,24}w_s{0,2}.csv`, `results/psweep_status.md`). Chart regenerates
+from these CSVs via `charts/make_linearity.py` — no hardcoded numbers.
 
 **The G4 split is the methodological centerpiece of this repo — a worked example of distinguishing
 a statistical artifact from a genuine physics gap by reconstruction, not by assumption.** Both series
