@@ -19,7 +19,9 @@
 - **재현성 스팟체크(팀리드 지시 3항)**: 신규 CSV `base_die_phy` max_temp_c = 230.19622°C, 기존 `results/p4_icepak_scenarios/p4_icepak_a_s2.csv`(P4 T3, 2026-07-19)의 동일 행 = 230.19607°C. 차이 0.00015°C(≈0.00007%) — **재현성 확인(사실상 동일)**.
 - **컨투어 export 블로커**: `create_fieldplot_cutplane`/`create_fieldplot_surface`/`create_fieldplot_volume` 3가지 방식 전부 `plot.create()`가 False 반환(예외 아님). AEDT 네이티브 메시지 매니저(`GetMessages`) 회수 결과: `"Plot '...' has been removed due to deletion of quantity expression"` — quantity="Temp"가 field-plot 등록 목록에 없음. `ipk.post.available_report_quantities()` 조회 결과 `['Residual.Continuity', 'Residual.Energy', 'Residual.XVelocity', 'Residual.YVelocity', 'Residual.ZVelocity']`만 반환 — Temp 자체가 report/field-plot용 quantity 레지스트리에 없음(반면 `get_scalar_field_value(quantity="Temp", ...)`는 정상 동작 — CSV export 경로는 다른 calculator 경로 사용 추정). 재솔브 없이 기존 `.aedt` 프로젝트(`C:\Users\<user>\Documents\Ansoft\hbm2e_8hi_layercake.aedt`)를 재오픈해 진단 — 재솔브는 하지 않았음(솔브 결과 그대로 보존).
 - **경로**: 재솔브 없이 열어서 시도(팀리드 지시 3항의 "결과 남아있으면 재솔브 없이 export 시도" 경로) — 시도했으나 API 차원의 근본 문제로 실패, 재솔브로도 해결 안 될 가능성 높음(quantity 자체가 등록 안 된 것으로 보임).
-- 상태: **컨투어는 블로커로 보류, CSV/재현성은 완료.** 팀리드에 보고 후 지시 대기.
+- **대안 경로 2차 시도(그리드 export, 팀리드 승인)**: `ipk.post.export_field_file_on_grid(quantity="Temp", ...)` — field-plot API와 다른 코드 경로(EnterQty/CalcStack 기반 field calculator). 재솔브 없이 기존 `.aedt` 재오픈(`Icepak_3X4`로 재오픈됨, 솔브 결과 보존), YZ 평면(x=5.5mm 중앙, base_die_tsva 관통) 그리드 y=[0,10]mm/z=[-0.05,0.83]mm 지정. `EnterQty("Temp")` 자체는 이번엔 통과(1차 시도와 다른 실패 지점)했으나 `ExportOnGrid` 네이티브 호출에서 gRPC 예외(`GrpcApiError: Failed to execute gRPC AEDT command: ExportOnGrid`). `GetMessages()` 원문: `"Setup: Failed to obtain mesh size for Ansys Electronics Desktop Student mesh limit check."` + `"Script macro error: Error in performing operation."` — quantity 문제가 아닌 Student 라이선스 mesh-size 조회 단계의 새로운 실패 모드.
+- **최종 판정(팀리드 3항 정지 조건 충족)**: 대안 경로도 실패 — **컨투어는 스코프 제외로 최종 확정, 추가 시도 없음.** 진단 스크립트 삭제, 커밋 대상 아님.
+- 상태: **컨투어는 스코프 제외 확정, CSV/재현성/선형성은 전부 완료.**
 
 ## 선형성 스팟체크 (팀리드 지시 5항)
 
